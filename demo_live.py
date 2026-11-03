@@ -1,4 +1,4 @@
-"""Demo interattiva Desktop unificata: Visione A ("Occhi") + Visione B ("Cervello").
+"""Demo dal vivo sul PC: Visione A ("Occhi") + Visione B ("Cervello") nella stessa finestra.
 
   [G]          -> Grok trova gli oggetti (anche quelli che YOLO non conosce, es. penne e matite)
                   e YOLO-World impara a seguirli dal vivo, anche se li muovi in mano
@@ -11,11 +11,14 @@
   [Click Dx]   -> Dezooma (riporta alla vista panoramica 1.0x, come [0] / [R])
   [C]          -> Dimentica tutto: oggetti di Grok e classi imparate (che altrimenti restano
                   in logs/vocab.json e tornano al prossimo avvio)
+  [1-9]        -> Seleziona l'oggetto con quel numero e zooma
   [K]          -> Mostra/nascondi percentuale di confidenza
   [+] / [-]    -> Alza/abbassa la soglia minima di confidenza (+/- 5%)
   [T]          -> Imposta target per il cane robotico
   [H]          -> Aiuto
   [Q] / ESC    -> Esci
+
+Senza XAI_API_KEY nel .env la demo parte in modalità finta (GROK_MOCK=1).
 
 Utilizzo:
   python demo_live.py                 # Webcam 0 con YOLOv8 ONNX + YOLO-World + Grok (.env)
@@ -38,18 +41,6 @@ import unicodedata
 from pathlib import Path
 
 import cv2
-from dotenv import find_dotenv, load_dotenv
-
-# Carica .env dalla root del progetto con massima priorità
-_env_path = find_dotenv(usecwd=True)
-if not _env_path:
-    _candidate = Path(__file__).resolve().parent / ".env"
-    _env_path = str(_candidate) if _candidate.exists() else None
-load_dotenv(_env_path)
-
-# Se non è impostata alcuna chiave, fallback a GROK_MOCK=1 per consentire demo offline
-if not os.getenv("XAI_API_KEY") and not os.getenv("OPENROUTER_API_KEY") and not os.getenv("GROK_MOCK"):
-    os.environ["GROK_MOCK"] = "1"
 
 from vision.eyes.depth import CLASS_PRIORS_CM, estimate_distance_m, format_distance
 from vision.eyes.marks import draw_marks
@@ -62,8 +53,14 @@ from vision.grok.open_vocab import OpenVocab, load_vocab, save_vocab
 from vision.grok.schemas import TrackedObject
 from vision.grok.tasks import describe_scene, detect_objects, name_objects, select
 
+# vision.grok.client ha già caricato il .env. Senza chiave si va in modalità finta.
+if not os.getenv("XAI_API_KEY") and not os.getenv("GROK_MOCK"):
+    os.environ["GROK_MOCK"] = "1"
+
 WIN = "Grok Hackathon - Occhi + Cervello Live"
 LOGS_DIR = Path("logs")
+VOCAB_PATH = LOGS_DIR / "vocab.json"          # classi imparate da Grok, ricaricate al prossimo avvio
+SELECTION_PATH = LOGS_DIR / "selection.json"  # ultima scelta, letta dal braccio (formato in vision/grok/handoff.py)
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 STATUS_COLOR = {"ok": (90, 220, 90), "wait": (0, 200, 255), "err": (70, 70, 255)}  # BGR
 HELP = [
@@ -82,7 +79,7 @@ HELP = [
 
 
 def _ascii(s: str) -> str:
-    """Rimuove caratteri accentati per compatibilità con cv2.putText."""
+    """cv2.putText non sa scrivere le lettere accentate: "è" -> "e"."""
     return unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode()
 
 
@@ -90,14 +87,10 @@ def display_obj(o: dict) -> str:
     return display(TrackedObject.model_validate(o))
 
 
-VOCAB_PATH = LOGS_DIR / "vocab.json"  # classi imparate da Grok, ricaricate al prossimo avvio
-SELECTION_PATH = LOGS_DIR / "selection.json"  # ultima scelta, letta dal braccio (formato in vision/grok/handoff.py)
-
-
 def _learn_size(label: str, size_cm) -> None:
-    """Misura reale stimata da Grok -> tabella delle misure della stima di distanza di Visione A.
-    ponytail: scriviamo nel dict di A in memoria (setdefault: le loro misure restano); se A
-    aggiunge un modo ufficiale per registrare misure, usare quello."""
+    """Aggiunge la misura reale stimata da Grok alla tabella usata da Visione A per la distanza.
+    ponytail: scriviamo in memoria nel dict di A (setdefault: le misure che hanno già restano);
+    se A aggiunge un modo ufficiale per registrare misure, usare quello."""
     if size_cm and len(size_cm) == 2 and all(v > 0 for v in size_cm):
         CLASS_PRIORS_CM.setdefault(label.strip().lower(), (float(size_cm[0]), float(size_cm[1])))
 
@@ -107,6 +100,7 @@ def _distance(o: dict) -> float | None:
 
 
 def _source(obj_id: int) -> str:
+    """Chi ha trovato l'oggetto, dagli intervalli di id: YOLO < 1000 <= Grok < 2000 <= YOLO-World."""
     return "YOLO" if obj_id < 1000 else "Grok" if obj_id < 2000 else "YOLO-World"
 
 
@@ -190,39 +184,35 @@ def main() -> None:
     parser.add_argument("--once", action="store_true", help="Scatta una foto, rileva con YOLO + Grok, salva logs/webcam_marked.jpg ed esce")
     parser.add_argument("--model", type=str, default="data/models/yolov8n.onnx", help="Pesi YOLO (.onnx o .pt)")
     parser.add_argument("--min-conf", type=float, default=0.40, help="Soglia minima di confidenza per visualizzare riquadri (default 0.40)")
-    parser.add_argument("--show-conf", action="store_true", default=True, help="Mostra percentuale confidenza nel badge")
     args = parser.parse_args()
 
-    mode = "replay" if args.replay else "webcam"
-    target = "data/replays/sample_arm.mp4" if args.replay else args.cam
-
     min_conf = max(0.05, min(0.95, args.min_conf))
-    show_conf = args.show_conf
+    show_conf = True  # K lo cambia
 
-    # Inizializza pipeline di Visione A
+    # Video e tracker YOLO di Visione A
     pipeline = EyePipeline(fps=30.0)
     pipeline.add_source(
         source="arm",
-        mode=mode,
-        target=target,
-        use_mock_tracker=False if not args.no_yolo else True,
+        mode="replay" if args.replay else "webcam",
+        target="data/replays/sample_arm.mp4" if args.replay else args.cam,
+        use_mock_tracker=args.no_yolo,
         model_name=args.model,
         conf_threshold=0.25,
         ema_alpha=0.65,
     )
+    arm_node = pipeline.nodes.get("arm")
+    zoom_mgr = arm_node.zoom if arm_node else None
 
-    # Se --no-yolo è attivo, disabilitiamo il tracker locale impostando use_mock=False senza modelli
-    if args.no_yolo:
-        node = pipeline.nodes.get("arm")
-        if node:
-            node.tracker.use_mock = False
-            node.tracker._yolo_model = None
-            node.tracker._onnx_net = None
+    # --no-yolo: tracker senza modello e senza oggetti finti, così gli oggetti arrivano solo da Grok
+    if args.no_yolo and arm_node:
+        arm_node.tracker.use_mock = False
+        arm_node.tracker._yolo_model = None
+        arm_node.tracker._onnx_net = None
 
-    # Modalità scatto singolo (--once)
+    # --once: una foto, YOLO + Grok, immagine salvata e risultato nel terminale
     if args.once:
         print("[Demo Once] Acquisizione fotogramma...")
-        payload = pipeline.step("arm")
+        pipeline.step("arm")
         raw_frame = pipeline.state.get_frame("arm")
         yolo_objs = pipeline.state.get_objects("arm")
 
@@ -243,7 +233,7 @@ def main() -> None:
         cv2.imwrite(str(out_path), marked)
 
         print("\n" + "=" * 60)
-        print(f" RISULTATO SCATTO SINGOLO:")
+        print(" RISULTATO SCATTO SINGOLO:")
         print(f" YOLO: {len(yolo_objs)} oggetti | Grok: {len(grok_objs)} oggetti")
         if res.meta:
             print(f" Latenza Grok: {res.meta.get('latency_ms', 0):.0f} ms")
@@ -269,16 +259,17 @@ def main() -> None:
     st = {
         "grok_objects": [],   # riquadri fermi di Grok (finché YOLO-World non segue quella classe)
         "objects": [],        # tutti gli oggetti dell'ultimo frame
-        "meta": {},           # id -> {name, color, tags} dati da Grok (N)
+        "frame_size": (640, 480),
+        "meta": {},           # id -> {name, color, tags} dati da Grok con N
         "label_meta": load_vocab(VOCAB_PATH),  # label -> {name, color, tags, size_cm}, anche dalle sessioni prima
         "selected_id": None,
         "sel_last": None,     # ultimo dict dell'oggetto selezionato, per riagganciarlo se cambia id
         "sel_seen": 0.0,      # quando l'abbiamo visto l'ultima volta
-        "last_cmd": None,
-        "sel_cmd": {},  # comando/azione dell'ultima scelta, riusati se la selezione si riaggancia
+        "sel_cmd": {},        # command/action/destination_id della scelta, riscritti se si riaggancia
+        "last_cmd": None,     # ultimo comando S andato a buon fine, per il pannello
         "typing": None,       # testo del comando mentre lo scrivi (None = non stai scrivendo)
         "help": False,
-        "is_busy": False,
+        "is_busy": False,     # una chiamata a Grok è in corso
         "status": ("Pronto. G = Grok trova gli oggetti, click = seleziona, H = aiuto.", "ok"),
         "latency_msg": "",
         "dog_info": "",
@@ -297,8 +288,10 @@ def main() -> None:
     def latency(res) -> str:
         return f"{res.meta.get('latency_ms', 0) / 1000:.1f} s" if res.meta else ""
 
-    zoom_node = pipeline.nodes.get("arm")
-    zoom_mgr = zoom_node.zoom if zoom_node else None
+    def reset_zoom() -> None:
+        if zoom_mgr is not None:
+            zoom_mgr.reset()
+            set_status("Zoom resettato (1.0x)")
 
     def send(obj: dict) -> str:
         """Scrive la scelta in logs/selection.json per il braccio; restituisce il testo per la barra."""
@@ -311,6 +304,7 @@ def main() -> None:
 
     def select_obj(obj: dict, command: str | None = None, action: str | None = None,
                    destination_id: int | None = None) -> str:
+        """Seleziona l'oggetto e lo manda al braccio. command/action ci sono solo se arriva da S."""
         st["selected_id"] = obj["id"]
         st["sel_last"], st["sel_seen"] = obj, time.time()
         st["sel_cmd"] = {"command": command, "action": action, "destination_id": destination_id}
@@ -319,29 +313,16 @@ def main() -> None:
                    f"{sent}  (Premi [Z] per zoomare)")
         return sent
 
-    # Handler click del mouse:
-    # - Click Sinistro: seleziona l'oggetto sotto il cursore
-    # - Click Destro:   dezooma (riporta alla vista panoramica 1.0x)
+    # Click sinistro = seleziona l'oggetto sotto il cursore, click destro = dezooma
     def on_mouse_click(event, x, y, flags, param):
         if event == cv2.EVENT_RBUTTONDOWN:
-            if zoom_mgr is not None:
-                zoom_mgr.reset()
-                set_status("Zoom resettato (1.0x)")
-            return
-
+            return reset_zoom()
         if event != cv2.EVENT_LBUTTONDOWN:
             return
-
-        win_w, win_h = st.get("frame_size", (640, 480))
-        nx = float(x) / max(1, win_w)
-        ny = float(y) / max(1, win_h)
-
-        # Se lo zoom è attivo, converti da coordinate zoomate a full
-        if zoom_mgr is not None and zoom_mgr.is_active():
-            fx, fy = zoom_mgr.zoomed_to_full_coords(nx, ny)
-        else:
-            fx, fy = nx, ny
-
+        win_w, win_h = st["frame_size"]
+        fx, fy = x / max(1, win_w), y / max(1, win_h)
+        if zoom_mgr is not None and zoom_mgr.is_active():  # da coordinate dello zoom a quelle del frame intero
+            fx, fy = zoom_mgr.zoomed_to_full_coords(fx, fy)
         clicked_obj = object_at(st["objects"], fx, fy)
         if clicked_obj is not None:
             select_obj(clicked_obj)
@@ -350,85 +331,79 @@ def main() -> None:
 
     cv2.setMouseCallback(WIN, on_mouse_click)
 
-    # Thread runners per chiamate a Grok
+    # Chiamate a Grok: ognuna in un thread, così il video non si ferma
     def run_grok_detect(raw_frame, yolo_objs):
-        try:
-            res = detect_objects(raw_frame, known=yolo_objs)
-            if not res.ok:
-                return set_status(f"Errore Grok: {res.error}", "err")
-            for o in res.objects:
-                _learn_size(o.label, o.size_cm)
-                st["label_meta"].setdefault(o.label, {"name": o.name, "color": o.color, "tags": o.tags,
-                                                      "size_cm": o.size_cm})
-            save_vocab(VOCAB_PATH, st["label_meta"])
-            st["grok_objects"] = [dict(o.model_dump(), distance_m=estimate_distance_m(o.label, o.bbox))
-                                  for o in res.objects]
-            names = ", ".join(o.name for o in res.objects) or "nessuno"
-            if ov and res.objects:
-                ov.set_classes(o.label for o in res.objects)
-                names += ". YOLO-World ora li segue dal vivo"
-            dropped = res.meta.get("discard_reasons", [])
-            if dropped:
-                names += f" (scartati {len(dropped)} riquadri dubbi)"
-                print("[Grok] scartati: " + "; ".join(dropped))
-            set_status(f"Grok ha trovato {len(res.objects)} oggetti: {names}")
-            st["latency_msg"] = latency(res)
-        finally:
-            st["is_busy"] = False
+        res = detect_objects(raw_frame, known=yolo_objs)
+        if not res.ok:
+            return set_status(f"Errore Grok: {res.error}", "err")
+        for o in res.objects:
+            _learn_size(o.label, o.size_cm)
+            st["label_meta"].setdefault(o.label, {"name": o.name, "color": o.color, "tags": o.tags,
+                                                  "size_cm": o.size_cm})
+        save_vocab(VOCAB_PATH, st["label_meta"])
+        st["grok_objects"] = [dict(o.model_dump(), distance_m=estimate_distance_m(o.label, o.bbox))
+                              for o in res.objects]
+        names = ", ".join(o.name for o in res.objects) or "nessuno"
+        if ov and res.objects:
+            ov.set_classes(o.label for o in res.objects)
+            names += ". YOLO-World ora li segue dal vivo"
+        dropped = res.meta.get("discard_reasons", [])
+        if dropped:
+            names += f" (scartati {len(dropped)} riquadri dubbi)"
+            print("[Grok] scartati: " + "; ".join(dropped))
+        set_status(f"Grok ha trovato {len(res.objects)} oggetti: {names}")
+        st["latency_msg"] = latency(res)
 
     def run_describe(raw_img, objs):
-        try:
-            res = describe_scene(raw_img, objs)
-            set_status(res.text, "ok") if res.ok else set_status(f"Errore: {res.error}", "err")
-            st["latency_msg"] = latency(res)
-        finally:
-            st["is_busy"] = False
+        res = describe_scene(raw_img, objs)
+        set_status(res.text) if res.ok else set_status(f"Errore: {res.error}", "err")
+        st["latency_msg"] = latency(res)
 
     def run_names(marked_img, objs):
-        try:
-            res = name_objects(marked_img, objs)
-            if not res.ok:
-                return set_status(f"Errore: {res.error}", "err")
-            by_id = {o["id"]: o for o in objs}
-            node = pipeline.nodes.get("arm")
-            for n in res.objects:
-                meta = {"name": n.name, "color": n.color, "tags": n.tags}
-                st["meta"][n.id] = meta
-                if n.id >= 2000:  # gli id di YOLO-World cambiano se perde l'oggetto: ricorda per classe
-                    lbl = by_id[n.id]["label"]
-                    st["label_meta"][lbl] = {**st["label_meta"].get(lbl, {}), **meta}  # tiene size_cm
-                if node and n.id < 1000:
-                    node.tracker.set_object_metadata(n.id, name=n.name, color=n.color)
-                for go in st["grok_objects"]:
-                    if go["id"] == n.id:
-                        go.update(meta)
-            save_vocab(VOCAB_PATH, st["label_meta"])
-            set_status("Nomi: " + (", ".join(f"#{n.id} {n.name}" for n in res.objects) or "nessuno"))
-            st["latency_msg"] = latency(res)
-        finally:
-            st["is_busy"] = False
+        res = name_objects(marked_img, objs)
+        if not res.ok:
+            return set_status(f"Errore: {res.error}", "err")
+        by_id = {o["id"]: o for o in objs}
+        for n in res.objects:
+            meta = {"name": n.name, "color": n.color, "tags": n.tags}
+            st["meta"][n.id] = meta
+            if n.id >= 2000:  # gli id di YOLO-World cambiano quando perde l'oggetto: il nome si ricorda per classe
+                lbl = by_id[n.id]["label"]
+                st["label_meta"][lbl] = {**st["label_meta"].get(lbl, {}), **meta}  # size_cm resta
+            if arm_node and n.id < 1000:
+                arm_node.tracker.set_object_metadata(n.id, name=n.name, color=n.color)
+            for go in st["grok_objects"]:
+                if go["id"] == n.id:
+                    go.update(meta)
+        save_vocab(VOCAB_PATH, st["label_meta"])
+        set_status("Nomi: " + (", ".join(f"#{n.id} {n.name}" for n in res.objects) or "nessuno"))
+        st["latency_msg"] = latency(res)
 
     def run_select(marked_img, objs, text):
-        try:
-            res = select(marked_img, objs, text)
-            st["latency_msg"] = f"{latency(res)} ({res.source})"
-            if not res.ok:
-                return set_status(f"Errore: {res.error}", "err")
-            if res.ambiguous:
-                return set_status(f"Quale? {res.question}", "wait")
-            hit = next((o for o in objs if o["id"] == res.target_id), None)
-            if hit is None:
-                return set_status(f"Non trovato: {res.reason}", "err")
-            st["last_cmd"] = {"target_id": res.target_id, "action": res.action, "source": res.source}
-            sent = select_obj(hit, text, res.action, res.destination_id)
-            set_status(f"'{text}' -> #{hit['id']} {display_obj(hit)}, azione: {res.action}, {sent}")
-        finally:
-            st["is_busy"] = False
+        res = select(marked_img, objs, text)
+        st["latency_msg"] = f"{latency(res)} ({res.source})"
+        if not res.ok:
+            return set_status(f"Errore: {res.error}", "err")
+        if res.ambiguous:
+            return set_status(f"Quale? {res.question}", "wait")
+        hit = next((o for o in objs if o["id"] == res.target_id), None)
+        if hit is None:
+            return set_status(f"Non trovato: {res.reason}", "err")
+        st["last_cmd"] = {"target_id": res.target_id, "action": res.action, "source": res.source}
+        sent = select_obj(hit, text, res.action, res.destination_id)
+        set_status(f"'{text}' -> #{hit['id']} {display_obj(hit)}, azione: {res.action}, {sent}")
 
     def start(job, *job_args, msg):
         st["is_busy"] = True
         set_status(msg, "wait")
-        threading.Thread(target=job, args=job_args, daemon=True).start()
+
+        def run():
+            try:
+                job(*job_args)
+            finally:
+                st["is_busy"] = False
+
+        threading.Thread(target=run, daemon=True).start()
 
     print("\n" + "=" * 65)
     print("  DEMO LIVE: OCCHI (Parte A) + CERVELLO (Parte B)   -   H nella finestra = aiuto")
@@ -468,9 +443,8 @@ def main() -> None:
 
             frame_display = draw_marks(raw, all_objs, min_conf=min_conf, show_conf=show_conf)
 
-            # Oggetto selezionato: sagoma (o riquadro bianco se la sagoma non si trova)
             sel = next((o for o in all_objs if o["id"] == st["selected_id"]), None)
-            # Il tracker l'ha perso per un attimo e gli ha dato un altro id: lo riagganciamo (per 3 s)
+            # Selezionato sparito: forse il tracker gli ha dato un altro id. Lo cerchiamo per 3 s
             if sel is None and st["sel_last"] and time.time() - st["sel_seen"] < 3.0:
                 sel = reacquire(all_objs, st["sel_last"])
                 if sel is not None:
@@ -481,6 +455,7 @@ def main() -> None:
                     if zoom_mgr is not None and zoom_mgr.target_id == old:
                         zoom_mgr.set_target_object(sel["id"])
                     set_status(f"#{sel['id']} riagganciato (prima #{old}): {display_obj(sel)}, {send(sel)}")
+            # Oggetto selezionato: sagoma, oppure riquadro bianco se la sagoma non si trova
             if sel is not None:
                 st["sel_last"], st["sel_seen"] = sel, time.time()
                 fit = refine_box(raw, sel["bbox"])
@@ -493,7 +468,6 @@ def main() -> None:
                     cv2.rectangle(frame_display, (int(bx * w_f) - 3, int(by * h_f) - 3),
                                   (int((bx + bw) * w_f) + 3, int((by + bh) * h_f) + 3), (255, 255, 255), 3)
 
-            # Se lo zoom è attivo, applica il ritaglio
             if zoom_mgr is not None and zoom_mgr.is_active():
                 zoom_mgr.update_with_tracked_objects(all_objs)
                 frame_display = zoom_mgr.apply(frame_display)
@@ -544,23 +518,20 @@ def main() -> None:
             elif key in (ord("h"), ord("H")):
                 st["help"] = not st["help"]
 
-            # Grok Detect [G]
             elif key in (ord("g"), ord("G")) and not st["is_busy"]:
                 start(run_grok_detect, raw.copy(), list(yolo_objs), msg="Grok cerca gli oggetti nella scena...")
 
-            # Grok Describe [D] o SPAZIO
             elif key in (ord("d"), ord("D"), 32) and not st["is_busy"]:
                 start(run_describe, raw.copy(), list(all_objs), msg="Grok descrive la scena...")
 
-            # Grok Naming [N]: immagine con i soli numeri, senza HUD né zoom
+            # N e S mandano a Grok il frame con i soli numeri, senza HUD né zoom
             elif key in (ord("n"), ord("N")) and not st["is_busy"]:
                 start(run_names, draw_marks(raw, all_objs), list(all_objs), msg="Grok da' i nomi agli oggetti...")
 
-            # Comando scritto nella finestra [S]
             elif key in (ord("s"), ord("S")):
                 st["typing"], st["help"] = "", False
 
-            # Dimentica tutto [C]: oggetti di Grok, classi di YOLO-World e vocab.json
+            # C: dimentica gli oggetti di Grok, le classi di YOLO-World e vocab.json
             elif key in (ord("c"), ord("C")):
                 st["grok_objects"], st["label_meta"] = [], {}
                 if ov:
@@ -568,12 +539,11 @@ def main() -> None:
                 save_vocab(VOCAB_PATH, {})
                 set_status("Dimenticato tutto: oggetti di Grok e classi imparate. G = ricomincia.")
 
-            # Toggle confidenza nel badge [K]
             elif key in (ord("k"), ord("K")):
                 show_conf = not show_conf
                 set_status(f"Percentuale di confidenza: {'visibile' if show_conf else 'nascosta'}")
 
-            # Regola soglia confidenza [+] / [-]
+            # + e - anche con = _ ] [ (stesso tasto senza Shift su layout diversi)
             elif key in (ord("+"), ord("="), ord("]")):
                 min_conf = min(0.95, round(min_conf + 0.05, 2))
                 set_status(f"Soglia di confidenza: {int(min_conf * 100)}%")
@@ -582,9 +552,8 @@ def main() -> None:
                 min_conf = max(0.05, round(min_conf - 0.05, 2))
                 set_status(f"Soglia di confidenza: {int(min_conf * 100)}%")
 
-            # Zoom sull'oggetto selezionato [Z]
             elif key in (ord("z"), ord("Z")):
-                target_obj = sel or st.get("sel_last")
+                target_obj = sel or st["sel_last"]
                 if target_obj is not None and zoom_mgr is not None:
                     zoom_mgr.set_target_object(target_obj["id"])
                     zoom_mgr.zoom_to_bbox(target_obj["bbox"])
@@ -595,7 +564,6 @@ def main() -> None:
                 else:
                     set_status("Seleziona prima un oggetto (con S o Click sinistro) e poi premi Z per zoomare.", "wait")
 
-            # Zoom numerico su ID [1-9] (seleziona e zooma)
             elif ord("1") <= key <= ord("9"):
                 target_num = key - ord("0")
                 if zoom_mgr is not None:
@@ -608,13 +576,9 @@ def main() -> None:
                     else:
                         set_status(f"Oggetto #{target_num} non visibile", "wait")
 
-            # Reset Zoom [0] o [R] (oltre al Click Destro del mouse)
             elif key in (ord("0"), ord("r"), ord("R")):
-                if zoom_mgr is not None:
-                    zoom_mgr.reset()
-                    set_status("Zoom resettato (1.0x)")
+                reset_zoom()
 
-            # Target Cane [T]
             elif key in (ord("t"), ord("T")):
                 target = sel or (all_objs[0] if all_objs else None)
                 if target:

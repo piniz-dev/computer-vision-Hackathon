@@ -1,6 +1,6 @@
-"""Disegno Set-of-Mark semplice: riquadro + id su ogni oggetto.
+"""Oggetti numerati sull'immagine (Set-of-Mark) e scelta dell'oggetto con il click.
 
-Visione A ha la sua versione per lo stream; questa serve per test e dataset.
+draw_marks è la versione semplice per test e dataset; Visione A ha la sua per lo stream.
 """
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import math
 import cv2
 import numpy as np
 
+from .geometry import center
 from .schemas import parse_objects
 
 # Colori BGR ben distinguibili, scelti in base all'id (stesso id -> stesso colore).
@@ -41,32 +42,19 @@ def draw_marks(frame: np.ndarray, objects: list) -> np.ndarray:
     return out
 
 
-def object_at(objects: list, fx: float, fy: float) -> dict | None:
-    """Oggetto sotto il click (coordinate normalizzate [0, 1]); se si sovrappongono, il più piccolo."""
-    hits = []
-    for o in objects:
-        bbox = o.get("bbox") if isinstance(o, dict) else getattr(o, "bbox", None)
-        if bbox is not None and len(bbox) == 4:
-            x, y, bw, bh = bbox
-            if x <= fx <= x + bw and y <= fy <= y + bh:
-                hits.append(o)
-    if not hits:
-        return None
-    return min(
-        hits,
-        key=lambda o: (o["bbox"][2] * o["bbox"][3]) if isinstance(o, dict) else (o.bbox[2] * o.bbox[3]),
-    )
-
-
-def _center(o: dict) -> tuple[float, float]:
-    x, y, w, h = o["bbox"]
-    return x + w / 2, y + h / 2
+def object_at(objects: list[dict], fx: float, fy: float) -> dict | None:
+    """Oggetto sotto il click (fx, fy normalizzati 0-1). Se più riquadri si sovrappongono vince il più
+    piccolo, così un oggetto dentro un altro resta cliccabile."""
+    hits = [o for o in objects
+            if (b := o["bbox"])[0] <= fx <= b[0] + b[2] and b[1] <= fy <= b[1] + b[3]]
+    return min(hits, key=lambda o: o["bbox"][2] * o["bbox"][3], default=None)
 
 
 def reacquire(objects: list[dict], last: dict, max_dist: float = 0.25) -> dict | None:
-    """L'oggetto selezionato ha cambiato id (il tracker l'ha perso per un attimo): ritrova quello
-    della stessa classe con il centro più vicino all'ultima posizione nota, entro `max_dist`
-    (coordinate normalizzate). None se non c'è."""
-    near = [(math.dist(_center(last), _center(o)), o) for o in objects if o["label"] == last["label"]]
+    """Ritrova l'oggetto selezionato quando il tracker gli cambia id (lo perde per un attimo e lo
+    riprende come nuovo). Sceglie quello della stessa classe con il centro più vicino all'ultima
+    posizione nota, entro `max_dist`. None se non c'è."""
+    near = [(math.dist(center(last["bbox"]), center(o["bbox"])), o)
+            for o in objects if o["label"] == last["label"]]
     dist, obj = min(near, key=lambda t: t[0], default=(math.inf, None))
     return obj if dist <= max_dist else None

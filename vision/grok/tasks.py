@@ -1,4 +1,4 @@
-"""I quattro compiti che usano Grok per capire le immagini.
+"""I compiti che usano Grok per capire le immagini: nomi, comando, descrizione, verifica, ricerca oggetti.
 
 Nessuno solleva eccezioni verso il chiamante: in caso di errore il risultato ha
 ok=False e il motivo in `error`. Ogni id restituito da Grok viene controllato
@@ -14,7 +14,7 @@ import time
 
 from . import prompts
 from .client import ask_json
-from .geometry import iou, refine_box
+from .geometry import center, iou, refine_box
 from .local_resolver import action_of, candidates, display, resolve_local
 from .schemas import (CommandResult, DetectResult, NamesResult, SceneResult, TrackedObject, VerifyResult,
                       parse_objects)
@@ -133,10 +133,10 @@ def detect_objects(img, known: list | None = None, start_id: int = 1000, max_obj
 
     known:    oggetti già trovati (es. da YOLO) che Grok non deve ripetere.
     start_id: gli id li assegniamo noi, consecutivi da qui (lontani da quelli del tracker).
-    Gli oggetti restituiti hanno lo stesso formato del gruppo (id, label, name, conf, bbox, color).
+    Gli oggetti hanno il formato del gruppo più `tags` e `size_cm` (misura reale stimata).
     I riquadri di Grok sono approssimativi e fermi: valgono per il frame inviato.
-    La conf di un LLM non è calibrata, quindi scartiamo noi i riquadri sospetti; il motivo di
-    ogni scarto finisce in meta["discard_reasons"].
+    La conf di un LLM non è calibrata, quindi i riquadri sospetti li scartiamo noi;
+    il motivo di ogni scarto finisce in meta["discard_reasons"].
     """
     known = parse_objects(known or [])
     res, meta = ask_json([img], prompts.detect_objects(known, max_objects), DetectResult,
@@ -200,11 +200,6 @@ def _mock_describe(objs: list[TrackedObject]) -> dict:
     return {"text": f"Vedo {len(objs)} oggetti: {listed}."}
 
 
-def _center(o: TrackedObject) -> tuple[float, float]:
-    x, y, w, h = o.bbox
-    return x + w / 2, y + h / 2
-
-
 def _mock_verify(before, after, action, target_id, destination_id) -> dict:
     b = {o.id: o for o in before}
     a = {o.id: o for o in after}
@@ -214,13 +209,13 @@ def _mock_verify(before, after, action, target_id, destination_id) -> dict:
     if action in ("pick", "place"):
         if action == "place" and destination_id in a and target_id in a:
             # posato: il centro dell'oggetto cade dentro la destinazione
-            cx, cy = _center(a[target_id])
+            cx, cy = center(a[target_id].bbox)
             x, y, w, h = a[destination_id].bbox
             done = x <= cx <= x + w and y <= cy <= y + h
         else:
             # preso/spostato: sparito dalla scena o centro spostato di oltre il 5%
             done = target_id not in a or max(
-                abs(p - q) for p, q in zip(_center(b[target_id]), _center(a[target_id]))) > 0.05
+                abs(p - q) for p, q in zip(center(b[target_id].bbox), center(a[target_id].bbox))) > 0.05
         if not done:
             return {"success": False, "reason": "L'oggetto è ancora nella stessa posizione.",
                     "suggestion": "Riprova avvicinando il braccio.", "confidence": 0.7}

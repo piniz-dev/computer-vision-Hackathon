@@ -8,7 +8,7 @@ from pydantic.json_schema import SkipJsonSchema
 
 
 class TrackedObject(BaseModel):
-    """Un oggetto riconosciuto da Visione A."""
+    """Un oggetto riconosciuto (da YOLO di Visione A, da YOLO-World o da Grok)."""
     id: int
     label: str                      # classe YOLO, es. "cup"
     name: str | None = None         # nome breve da dire a voce, es. "tazza rossa"

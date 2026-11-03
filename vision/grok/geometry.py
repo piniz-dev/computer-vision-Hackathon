@@ -1,8 +1,13 @@
-"""Sagoma dell'oggetto dentro il suo riquadro (GrabCut di OpenCV, nessun modello)."""
+"""Geometria dei riquadri [x, y, w, h] normalizzati 0-1 e sagoma dell'oggetto (GrabCut, nessun modello)."""
 from __future__ import annotations
 
 import cv2
 import numpy as np
+
+
+def center(bbox) -> tuple[float, float]:
+    x, y, w, h = bbox
+    return x + w / 2, y + h / 2
 
 
 def iou(a, b) -> float:
@@ -16,11 +21,12 @@ def iou(a, b) -> float:
 
 
 def refine_box(frame: np.ndarray, bbox, max_side: int = 160):
-    """(bbox stretto, contorno in pixel del frame) oppure None se nel riquadro non c'è un oggetto
-    distinguibile dallo sfondo. bbox = [x, y, w, h] normalizzati 0-1."""
+    """Restituisce (bbox stretto, contorno in pixel del frame), oppure None se nel riquadro non c'è
+    un oggetto separabile dallo sfondo."""
     H, W = frame.shape[:2]
     x, y, w, h = bbox
-    # ritaglio con un po' di margine attorno: GrabCut impara lo sfondo da lì
+    # Ritaglio con il 15% di margine: GrabCut impara lo sfondo da quel bordo
+
     mx, my = w * 0.15, h * 0.15
     x1, y1 = max(0, int((x - mx) * W)), max(0, int((y - my) * H))
     x2, y2 = min(W, int((x + w + mx) * W)), min(H, int((y + h + my) * H))

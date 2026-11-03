@@ -116,7 +116,7 @@ def candidates(objects: list, text: str) -> list[TrackedObject] | None:
                 and colors <= _colors(o)                   # tutti i colori detti
                 and all(t in words or _SYN.get(t) == o.label.lower() for t in nouns))
 
-    # ponytail: niente negazioni ("non la rossa") né plurali; quei casi finiscono a Grok o sbagliano.
+    # ponytail: niente negazioni ("non la rossa") né posizioni ("quella a sinistra"): quei casi vanno a Grok.
     return [o for o in objs if match(o)]
 
 
@@ -126,7 +126,7 @@ def resolve_local(objects: list, text: str) -> CommandResult | None:
         hits = candidates(objects, text)
     except Exception:  # input non valido: lo gestirà (e segnalerà) la strada Grok
         return None
-    if not hits or len(hits) != 1:
+    if len(hits or []) != 1:
         return None
     o = hits[0]
     return CommandResult(target_id=o.id, action=action_of(text), confidence=0.9,
