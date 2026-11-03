@@ -5,7 +5,8 @@ verificato sulla documentazione è scritto nel README.
 
 Configurazione da `.env`:
   XAI_API_KEY   chiave (obbligatoria se non in modalità finta)
-  XAI_MODEL     modello con input immagini (default grok-4.7)
+  XAI_BASE_URL  endpoint compatibile OpenAI (default xAI; per OpenRouter https://openrouter.ai/api/v1)
+  XAI_MODEL     modello con input immagini (default grok-4.7; su OpenRouter x-ai/grok-4.7)
   GROK_MOCK=1   modalità finta: nessuna chiamata di rete
   GROK_TIMEOUT  secondi massimi per chiamata (default 8)
 """
@@ -26,7 +27,7 @@ from pydantic import BaseModel, ValidationError
 
 load_dotenv()
 
-BASE_URL = "https://api.x.ai/v1"
+BASE_URL = os.getenv("XAI_BASE_URL") or "https://api.x.ai/v1"
 DEFAULT_MODEL = "grok-4.7"
 DEFAULT_TIMEOUT = float(os.getenv("GROK_TIMEOUT", "8.0"))
 LOG_PATH = Path("logs/grok_calls.jsonl")

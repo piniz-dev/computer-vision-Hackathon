@@ -19,8 +19,9 @@ copy .env.example .env            # Linux/macOS: cp .env.example .env
 
 | Variabile | Default | Significato |
 |---|---|---|
-| `XAI_API_KEY` | — | chiave xAI (obbligatoria se non in modalità finta) |
-| `XAI_MODEL` | `grok-4.7` | modello con input di immagini |
+| `XAI_API_KEY` | — | chiave xAI o OpenRouter (obbligatoria se non in modalità finta) |
+| `XAI_BASE_URL` | `https://api.x.ai/v1` | endpoint compatibile OpenAI. OpenRouter: `https://openrouter.ai/api/v1` |
+| `XAI_MODEL` | `grok-4.7` | modello con input di immagini. Su OpenRouter: `x-ai/grok-4.7` (accetta immagini, `response_format` e `structured_outputs`) |
 | `GROK_MOCK` | `0` | `1` = modalità finta: risposte deterministiche, nessuna chiamata di rete |
 | `GROK_TIMEOUT` | `8` | secondi massimi per chiamata (con il nuovo tentativo, al massimo il doppio) |
 
@@ -91,6 +92,13 @@ python -m vision.grok.cli verify   --before A.jpg --after B.jpg --objects-before
 Le immagini sono frame originali (i numeri li disegna `draw_marks`). Esce con 0 se `ok`, 1 altrimenti.
 Prova senza chiave: `GROK_MOCK=1` (PowerShell: `$env:GROK_MOCK=1`).
 
+Prova con la webcam del PC (Grok descrive cosa vede, senza YOLO):
+
+```bash
+python -m vision.grok.webcam_demo            # finestra live: SPAZIO = chiedi a Grok, Q = esci
+python -m vision.grok.webcam_demo --once     # una foto, risposta nel terminale
+```
+
 ## Test
 
 ```bash
@@ -130,6 +138,11 @@ rigenerati con la chiave vera.
 | Strumenti Grok Voice | Tool "piatti" `{"type": "function", "name", "description", "parameters"}` in `session.update`; chiamata in `response.function_call_arguments.done` con `arguments` stringa JSON; risposta con `function_call_output` + `response.create` | [Speech to Speech](https://docs.x.ai/developers/model-capabilities/audio/voice-agent) |
 
 ## Da verificare con la chiave vera
+
+**Provato via OpenRouter (`x-ai/grok-4.7`, 3 novembre 2026):** immagini accettate, `json_schema` strict
+accettato (nessun ripiego), `usage` presente (~2300 token in ingresso e ~210 in uscita per comando),
+32 chiamate tutte valide al primo tentativo, latenza 2,1–7,0 s (p50 ~2,8 s), valutazione sintetica 20/20.
+Da ripetere con la chiave xAI diretta (`api.x.ai`):
 
 1. **Modello:** che `grok-4.7` accetti davvero immagini in Chat Completions (altrimenti cambiare `XAI_MODEL`).
 2. **`json_schema`:** che venga accettato con `"strict": true` sui nostri schemi. Se no, il client ripiega da
