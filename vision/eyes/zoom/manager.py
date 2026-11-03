@@ -96,29 +96,32 @@ class DigitalZoomManager:
 
         self.target_window = CropWindow(x1, y1, x2, y2).clamp()
 
-    def zoom_to_bbox(self, bbox: Sequence[float], padding: float = 0.25) -> None:
+    def zoom_to_bbox(self, bbox: Sequence[float], padding: float = 0.40) -> None:
         """
-        Imposta il target di zoom per inquadrare una bounding box [x1, y1, x2, y2].
+        Imposta il target di zoom per centrare e inquadrare una bounding box [x, y, w, h] normalizzata.
         """
         if len(bbox) != 4:
             return
 
-        bx1, by1, bx2, by2 = bbox
-        bw = max(0.01, bx2 - bx1)
-        bh = max(0.01, by2 - by1)
-        cx = (bx1 + bx2) / 2.0
-        cy = (by1 + by2) / 2.0
+        bx, by, bw, bh = [float(v) for v in bbox]
+        bw = max(0.02, bw)
+        bh = max(0.02, bh)
+        cx = bx + bw / 2.0
+        cy = by + bh / 2.0
 
-        # Aggiungi padding
+        # Aggiungi margine attorno all'oggetto (almeno 1.5x, massimo max_factor)
         target_span = max(bw, bh) * (1.0 + padding)
-        factor = 1.0 / max(0.05, target_span)
+        factor = float(np.clip(1.0 / max(0.08, target_span), max(1.5, self.min_factor), self.max_factor))
+
+        saved_id = self.target_id
         self.zoom_to_point(cx, cy, factor)
+        self.target_id = saved_id
 
     def set_target_object(self, obj_id: int) -> None:
         """Registra un ID oggetto su cui mantenere il tracking dello zoom."""
         self.target_id = obj_id
 
-    def update_with_tracked_objects(self, objects: list[dict]) -> None:
+    def update_with_tracked_objects(self, objects: Sequence[dict | object]) -> None:
         """
         Se c'è un target_id agganciato, aggiorna la posizione del crop sulla sua bbox corrente.
         """
@@ -126,8 +129,9 @@ class DigitalZoomManager:
             return
 
         for obj in objects:
-            if obj.get("id") == self.target_id:
-                bbox = obj.get("bbox")
+            oid = obj.get("id") if isinstance(obj, dict) else getattr(obj, "id", None)
+            if oid == self.target_id:
+                bbox = obj.get("bbox") if isinstance(obj, dict) else getattr(obj, "bbox", None)
                 if bbox and len(bbox) == 4:
                     self.zoom_to_bbox(bbox)
                 return
@@ -147,6 +151,9 @@ class DigitalZoomManager:
 
         self.current_window = CropWindow(nx1, ny1, nx2, ny2).clamp()
         self.current_factor = 1.0 / max(1e-4, self.current_window.width())
+        if self.target_factor <= 1.001 and self.current_factor <= 1.03:
+            self.current_window = CropWindow(0.0, 0.0, 1.0, 1.0)
+            self.current_factor = 1.0
 
     def apply(self, frame: np.ndarray, output_size: Optional[Tuple[int, int]] = None) -> np.ndarray:
         """

@@ -317,6 +317,14 @@ def test_digital_zoom_manager():
     cropped = zoom.apply(dummy_frame)
     assert cropped.shape == (480, 640, 3)
 
+    # Test zoom_to_bbox con formato [x, y, w, h] e conservazione target_id
+    zoom.set_target_object(7)
+    zoom.zoom_to_bbox((0.40, 0.30, 0.20, 0.20))  # centro in (0.50, 0.40)
+    assert zoom.target_id == 7
+    tcx, tcy = zoom.target_window.center()
+    assert abs(tcx - 0.50) < 0.02
+    assert abs(tcy - 0.40) < 0.02
+
     # Test reset
     zoom.reset()
     for _ in range(15):

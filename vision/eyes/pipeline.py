@@ -97,6 +97,7 @@ class EyePipeline:
         source: str,
         min_display_conf: float = 0.0,
         show_conf: bool = False,
+        apply_zoom: bool = True,
     ) -> FramePayload:
         """Esegue un singolo ciclo completo di percezione per la sorgente indicata."""
         if source not in self.nodes:
@@ -126,7 +127,7 @@ class EyePipeline:
             show_conf=show_conf,
         )
 
-        if node.zoom is not None and node.zoom.is_active():
+        if apply_zoom and node.zoom is not None and node.zoom.is_active():
             node.zoom.update_with_tracked_objects(objects)
             marked = node.zoom.apply(marked)
 

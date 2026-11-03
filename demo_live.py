@@ -5,10 +5,9 @@
   [N]          -> Grok dà un nome breve a tutti gli oggetti numerati
   [S]          -> Scrivi un comando nella finestra (es. 'prendi la penna blu'), Invio per mandarlo
   [D] / SPAZIO -> Grok descrive la scena
-  [Click]      -> Su un oggetto: SELEZIONE (sagoma + pannello, JSON nel terminale)
-                  Sullo sfondo:  ZOOM DIGITALE sul punto cliccato
-  [1-9]        -> Zoom e tracking automatico sull'oggetto con quell'ID
-  [0] / [R]    -> Reset zoom
+  [Click Sx]   -> Seleziona un oggetto sotto il cursore (sagoma + pannello, JSON nel terminale)
+  [Z]          -> Zoom sull'oggetto attualmente selezionato (con S o Click Sx)
+  [Click Dx]   -> Dezooma (riporta alla vista panoramica 1.0x, come [0] / [R])
   [C]          -> Dimentica tutto: oggetti di Grok e classi imparate (che altrimenti restano
                   in logs/vocab.json e tornano al prossimo avvio)
   [K]          -> Mostra/nascondi percentuale di confidenza
@@ -70,8 +69,9 @@ HELP = [
     "N       Grok da' i nomi",
     "S       scrivi un comando (es. prendi la penna blu)",
     "D/Spazio  descrivi la scena",
-    "Click   seleziona oggetto / zoom sullo sfondo",
-    "1-9     zoom su oggetto    0/R  reset zoom",
+    "Click Sx  seleziona oggetto",
+    "Z       zoom sull'oggetto selezionato",
+    "Click Dx  dezooma (oppure 0 / R)",
     "C       dimentica tutto (oggetti di Grok e classi imparate)",
     "+/-     soglia confidenza    K  mostra %",
     "T       target cane",
@@ -121,7 +121,7 @@ def _text(frame, s, x, y, color=(255, 255, 255), scale=0.45, thick=1):
 def _draw_top(frame, fps, n_objs, zoom, live_status):
     w = frame.shape[1]
     _box(frame, 0, 0, w, 44)
-    _text(frame, "H aiuto   G trova   N nomi   S comando   D descrivi   Q esci", 10, 18, (0, 230, 255))
+    _text(frame, "H aiuto   G trova   N nomi   S comando   Z zoom sel   Click Dx dezooma   D descrivi   Q esci", 10, 18, (0, 230, 255))
     _text(frame, f"FPS {fps:.0f}  |  {n_objs} oggetti  |  zoom {zoom:.1f}x  |  live: {live_status}",
           10, 36, (190, 190, 190), 0.4)
 
@@ -300,21 +300,27 @@ def main() -> None:
         st["selected_id"] = obj["id"]
         st["sel_last"], st["sel_seen"] = obj, time.time()
         obj["distance_m"] = _distance(obj)
-        set_status(f"Selezionato #{obj['id']}: {display_obj(obj)} - distanza {format_distance(obj['distance_m'])}")
+        set_status(
+            f"Selezionato #{obj['id']}: {display_obj(obj)} - distanza {format_distance(obj['distance_m'])}  "
+            f"(Premi [Z] per zoomare)"
+        )
         print("\n[ROBOT PICK] Oggetto selezionato da passare al robot:")
         print(json.dumps(obj, ensure_ascii=False, indent=2))
 
     # Handler click del mouse:
-    # 1. Se clicchi su un oggetto -> SELEZIONE per il robot
-    # 2. Se clicchi su spazio vuoto -> ZOOM DIGITALE sul punto cliccato
+    # - Click Sinistro: seleziona l'oggetto sotto il cursore
+    # - Click Destro:   dezooma (riporta alla vista panoramica 1.0x)
     def on_mouse_click(event, x, y, flags, param):
+        if event == cv2.EVENT_RBUTTONDOWN:
+            if zoom_mgr is not None:
+                zoom_mgr.reset()
+                set_status("Zoom resettato (1.0x)")
+            return
+
         if event != cv2.EVENT_LBUTTONDOWN:
             return
 
-        node_r = zoom_node.reader if zoom_node else None
-        win_w = node_r.width if node_r and node_r.width else 640
-        win_h = node_r.height if node_r and node_r.height else 480
-
+        win_w, win_h = st.get("frame_size", (640, 480))
         nx = float(x) / max(1, win_w)
         ny = float(y) / max(1, win_h)
 
@@ -327,10 +333,8 @@ def main() -> None:
         clicked_obj = object_at(st["objects"], fx, fy)
         if clicked_obj is not None:
             select_obj(clicked_obj)
-        elif zoom_mgr is not None:
-            # Click su sfondo vuoto: effettua zoom digitale centrato sul punto
-            zoom_mgr.zoom_to_point(fx, fy, factor=2.5)
-            set_status(f"Zoom 2.5x su ({fx:.2f}, {fy:.2f}). 0 = torna indietro")
+        else:
+            set_status("Nessun oggetto qui. Clicca su un oggetto o premi [S] per selezionarlo.", "wait")
 
     cv2.setMouseCallback(WIN, on_mouse_click)
 
@@ -430,8 +434,9 @@ def main() -> None:
             if dt > 0:
                 fps_smooth = 0.90 * fps_smooth + 0.10 * (1.0 / dt)
 
-            pipeline.step("arm", min_display_conf=min_conf, show_conf=show_conf)
+            pipeline.step("arm", min_display_conf=min_conf, show_conf=show_conf, apply_zoom=False)
             raw = pipeline.state.get_frame("arm")
+            st["frame_size"] = (raw.shape[1], raw.shape[0])
             yolo_objs = pipeline.state.get_objects("arm")
 
             # YOLO-World: oggetti vivi delle classi trovate da Grok, con i nomi dati da Grok
@@ -461,6 +466,8 @@ def main() -> None:
                     st["selected_id"] = sel["id"]
                     if st["last_cmd"] and st["last_cmd"]["target_id"] == old:
                         st["last_cmd"]["target_id"] = sel["id"]
+                    if zoom_mgr is not None and zoom_mgr.target_id == old:
+                        zoom_mgr.set_target_object(sel["id"])
                     set_status(f"#{sel['id']} riagganciato (prima #{old}): {display_obj(sel)}")
             if sel is not None:
                 st["sel_last"], st["sel_seen"] = sel, time.time()
@@ -563,19 +570,33 @@ def main() -> None:
                 min_conf = max(0.05, round(min_conf - 0.05, 2))
                 set_status(f"Soglia di confidenza: {int(min_conf * 100)}%")
 
-            # Zoom numerico su ID [1-9]
+            # Zoom sull'oggetto selezionato [Z]
+            elif key in (ord("z"), ord("Z")):
+                target_obj = sel or st.get("sel_last")
+                if target_obj is not None and zoom_mgr is not None:
+                    zoom_mgr.set_target_object(target_obj["id"])
+                    zoom_mgr.zoom_to_bbox(target_obj["bbox"])
+                    set_status(
+                        f"Zoom su #{target_obj['id']} ({display_obj(target_obj)}). "
+                        f"Click destro del mouse (o 0/R) per dezoomare."
+                    )
+                else:
+                    set_status("Seleziona prima un oggetto (con S o Click sinistro) e poi premi Z per zoomare.", "wait")
+
+            # Zoom numerico su ID [1-9] (seleziona e zooma)
             elif ord("1") <= key <= ord("9"):
                 target_num = key - ord("0")
                 if zoom_mgr is not None:
                     matched = [o for o in all_objs if o.get("id") == target_num]
-                    zoom_mgr.set_target_object(target_num)
                     if matched:
+                        select_obj(matched[0])
+                        zoom_mgr.set_target_object(target_num)
                         zoom_mgr.zoom_to_bbox(matched[0]["bbox"])
-                        set_status(f"Zoom su #{target_num} ({display_obj(matched[0])})")
+                        set_status(f"Zoom su #{target_num} ({display_obj(matched[0])}). Click destro = dezooma.")
                     else:
-                        set_status(f"Zoom su #{target_num} appena compare", "wait")
+                        set_status(f"Oggetto #{target_num} non visibile", "wait")
 
-            # Reset Zoom [0] o [R]
+            # Reset Zoom [0] o [R] (oltre al Click Destro del mouse)
             elif key in (ord("0"), ord("r"), ord("R")):
                 if zoom_mgr is not None:
                     zoom_mgr.reset()
