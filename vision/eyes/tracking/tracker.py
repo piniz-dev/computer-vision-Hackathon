@@ -12,12 +12,25 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 import cv2
 import numpy as np
 
 from ..schemas import CoordsMM, EyeObject
+
+COCO_CLASSES = [
+    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat", "traffic light",
+    "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
+    "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
+    "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard",
+    "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
+    "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch",
+    "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote", "keyboard", "cell phone",
+    "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors", "teddy bear",
+    "hair drier", "toothbrush"
+]
 
 
 def compute_iou(box_a: tuple[float, float, float, float], box_b: tuple[float, float, float, float]) -> float:
@@ -212,14 +225,34 @@ class ObjectTracker:
             use_mock = os.getenv("EYES_MOCK", "0") == "1"
         self.use_mock = use_mock
         self._yolo_model = None
+        self._onnx_net = None
 
         if not self.use_mock:
+            # 1. Prova prima con Ultralytics YOLO se presente
             try:
                 from ultralytics import YOLO  # type: ignore
 
                 self._yolo_model = YOLO(self.model_name)
             except Exception:
-                # Se ultralytics non è installato o il modello non è presente offline, usa il tracker locale
+                self._yolo_model = None
+
+            # 2. Se ultralytics non è disponibile, prova con OpenCV DNN + ONNX
+            if self._yolo_model is None:
+                candidates = [
+                    Path("data/models/yolov8n.onnx"),
+                    Path("yolov8n.onnx"),
+                    Path(__file__).resolve().parents[3] / "data" / "models" / "yolov8n.onnx",
+                ]
+                for p in candidates:
+                    if p.exists():
+                        try:
+                            self._onnx_net = cv2.dnn.readNetFromONNX(str(p))
+                            break
+                        except Exception:
+                            pass
+
+            # 3. Fallback a mock solo se esplicitamente richiesto o se né YOLO né ONNX sono disponibili
+            if self._yolo_model is None and self._onnx_net is None and use_mock is None:
                 self.use_mock = True
 
     def _smooth_yolo_bbox(self, obj_id: int, bbox: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
@@ -284,6 +317,54 @@ class ObjectTracker:
 
         return raw_dets
 
+    def _detect_onnx(self, frame_bgr: np.ndarray) -> list[tuple[str, float, tuple[float, float, float, float]]]:
+        """Inferenzia YOLOv8 ONNX via OpenCV DNN per un'accurata object detection senza PyTorch."""
+        if self._onnx_net is None or frame_bgr is None or frame_bgr.size == 0:
+            return []
+
+        h_img, w_img = frame_bgr.shape[:2]
+        blob = cv2.dnn.blobFromImage(frame_bgr, 1.0 / 255.0, (640, 640), swapRB=True, crop=False)
+        self._onnx_net.setInput(blob)
+        preds = self._onnx_net.forward()[0]  # shape (84, 8400)
+        preds = preds.transpose()            # shape (8400, 84)
+
+        boxes = []
+        confidences = []
+        class_ids = []
+
+        for row in preds:
+            classes_scores = row[4:]
+            max_score_idx = int(np.argmax(classes_scores))
+            max_score = float(classes_scores[max_score_idx])
+            if max_score >= self.conf_threshold:
+                cx, cy, w, h = row[0:4]
+                x1 = int((cx - w / 2.0) * (w_img / 640.0))
+                y1 = int((cy - h / 2.0) * (h_img / 640.0))
+                bw = int(w * (w_img / 640.0))
+                bh = int(h * (h_img / 640.0))
+                boxes.append([x1, y1, bw, bh])
+                confidences.append(max_score)
+                class_ids.append(max_score_idx)
+
+        if not boxes:
+            return []
+
+        indices = cv2.dnn.NMSBoxes(boxes, confidences, self.conf_threshold, 0.45)
+        raw_dets: list[tuple[str, float, tuple[float, float, float, float]]] = []
+        for idx in indices:
+            i = int(idx)
+            x1, y1, bw, bh = boxes[i]
+            cid = class_ids[i]
+            label = COCO_CLASSES[cid] if 0 <= cid < len(COCO_CLASSES) else "object"
+            conf = confidences[i]
+            nx = max(0.0, min(1.0, x1 / w_img))
+            ny = max(0.0, min(1.0, y1 / h_img))
+            nw = max(0.0, min(1.0 - nx, bw / w_img))
+            nh = max(0.0, min(1.0 - ny, bh / h_img))
+            raw_dets.append((label, conf, (nx, ny, nw, nh)))
+
+        return raw_dets
+
     def process_frame(self, frame_bgr: np.ndarray, apply_calibration: bool = False) -> list[EyeObject]:
         """Rileva e traccia gli oggetti nel frame restituendo una lista di `EyeObject`."""
         if frame_bgr is None or frame_bgr.size == 0:
@@ -328,9 +409,15 @@ class ObjectTracker:
 
                     if raw_for_fallback:
                         tracked_items.extend(self._fallback_tracker.update(raw_for_fallback))
-        else:
+        elif not self.use_mock and self._onnx_net is not None:
+            raw_dets = self._detect_onnx(frame_bgr)
+            tracked_items = self._fallback_tracker.update(raw_dets)
+        elif self.use_mock:
             raw_dets = self._detect_mock(frame_bgr)
             tracked_items = self._fallback_tracker.update(raw_dets)
+        else:
+            # use_mock=False e nessun modello disponibile: non allucinare falsi box
+            tracked_items = []
 
         eye_objects: list[EyeObject] = []
         for obj_id, label, conf, bbox in tracked_items:

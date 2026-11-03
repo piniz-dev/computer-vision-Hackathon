@@ -3,7 +3,7 @@ import pytest
 
 from vision.grok import tasks
 from vision.grok.schemas import CommandResult, DetectedObject, DetectResult, NamesResult, ObjectName
-from vision.grok.webcam_demo import object_at
+from vision.grok.marks import object_at
 
 
 def _grok_answers(monkeypatch, result):

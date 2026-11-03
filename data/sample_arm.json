@@ -1,0 +1,64 @@
+﻿{
+  "source": "arm",
+  "frame_id": 1,
+  "ts": 1793697637.118006,
+  "objects": [
+    {
+      "id": 1,
+      "label": "box",
+      "name": null,
+      "conf": 0.87,
+      "bbox": [
+        0.7188,
+        0.5208,
+        0.1281,
+        0.15
+      ],
+      "color": "verde",
+      "coords_mm": {
+        "x": 258.9,
+        "y": 127.35,
+        "angle_deg": 0.0
+      }
+    },
+    {
+      "id": 2,
+      "label": "cup",
+      "name": null,
+      "conf": 0.87,
+      "bbox": [
+        0.1719,
+        0.2917,
+        0.1187,
+        0.1792
+      ],
+      "color": "rosso",
+      "coords_mm": {
+        "x": 47.1,
+        "y": 66.76,
+        "angle_deg": 0.0
+      }
+    },
+    {
+      "id": 3,
+      "label": "bottle",
+      "name": null,
+      "conf": 0.89,
+      "bbox": [
+        0.4688,
+        0.2292,
+        0.0875,
+        0.2729
+      ],
+      "color": "blu",
+      "coords_mm": {
+        "x": 155.1,
+        "y": 62.35,
+        "angle_deg": 90.0
+      }
+    }
+  ],
+  "dog_telemetry": null,
+  "safety_stop": false,
+  "safety_reason": null
+}

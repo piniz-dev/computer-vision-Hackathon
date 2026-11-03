@@ -22,13 +22,18 @@ from typing import Any, Callable
 import cv2
 import numpy as np
 import openai
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel, ValidationError
 
-load_dotenv()
+# Carica .env dalla root del progetto (o directory superiori)
+_env_file = find_dotenv(usecwd=True)
+if not _env_file:
+    _candidate = Path(__file__).resolve().parents[2] / ".env"
+    _env_file = str(_candidate) if _candidate.exists() else None
+load_dotenv(_env_file)
 
 BASE_URL = os.getenv("XAI_BASE_URL") or "https://api.x.ai/v1"
-DEFAULT_MODEL = "grok-4.7"
+DEFAULT_MODEL = os.getenv("XAI_MODEL") or "grok-4.7"
 DEFAULT_TIMEOUT = float(os.getenv("GROK_TIMEOUT", "8.0"))
 LOG_PATH = Path("logs/grok_calls.jsonl")
 

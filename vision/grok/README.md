@@ -96,13 +96,14 @@ Prova senza chiave: `GROK_MOCK=1` (PowerShell: `$env:GROK_MOCK=1`).
 Prova con la webcam del PC (usa il tracker YOLO di Visione A se `ultralytics` è installato):
 
 ```bash
-python -m vision.grok.webcam_demo            # finestra live
-python -m vision.grok.webcam_demo --once     # una foto: YOLO + Grok, salva logs/webcam_marked.jpg
+python demo_live.py            # finestra live (YOLO ONNX + Grok + Zoom)
+python demo_live.py --once     # una foto: YOLO + Grok, salva logs/webcam_marked.jpg
 ```
 
 Nella finestra: YOLO segue dal vivo gli oggetti che conosce; **G** = Grok trova gli altri oggetti
-(riquadri fermi), **N** = Grok dà i nomi, **SPAZIO** = descrizione, **click** = seleziona l'oggetto
-(stampa il JSON da passare al robot), **C** = cancella gli oggetti di Grok, **Q** = esci.
+(riquadri fermi), **N** = Grok dà i nomi, **SPAZIO** / **D** = descrizione, **click** = seleziona l'oggetto
+(stampa il JSON da passare al robot) oppure zoom su sfondo vuoto, **1-9** = zoom su oggetto, **0** = reset zoom,
+**C** = cancella gli oggetti di Grok, **Q** = esci.
 Per `detect_objects` serve `GROK_TIMEOUT` intorno a 20.
 
 ## Test

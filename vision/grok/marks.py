@@ -37,3 +37,20 @@ def draw_marks(frame: np.ndarray, objects: list) -> np.ndarray:
         ink = (0, 0, 0) if 0.114 * b + 0.587 * g + 0.299 * r > 140 else (255, 255, 255)  # testo leggibile
         cv2.putText(out, text, (x1 + 3, ty + th + 2), cv2.FONT_HERSHEY_SIMPLEX, scale, ink, thick, cv2.LINE_AA)
     return out
+
+
+def object_at(objects: list, fx: float, fy: float) -> dict | None:
+    """Oggetto sotto il click (coordinate normalizzate [0, 1]); se si sovrappongono, il più piccolo."""
+    hits = []
+    for o in objects:
+        bbox = o.get("bbox") if isinstance(o, dict) else getattr(o, "bbox", None)
+        if bbox is not None and len(bbox) == 4:
+            x, y, bw, bh = bbox
+            if x <= fx <= x + bw and y <= fy <= y + bh:
+                hits.append(o)
+    if not hits:
+        return None
+    return min(
+        hits,
+        key=lambda o: (o["bbox"][2] * o["bbox"][3]) if isinstance(o, dict) else (o.bbox[2] * o.bbox[3]),
+    )
