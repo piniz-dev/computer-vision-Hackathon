@@ -10,10 +10,11 @@ deterministiche, plausibili, costruite solo dagli oggetti in ingresso.
 from __future__ import annotations
 
 import functools
-import re
+import time
 
 from . import prompts
 from .client import ask_json
+from .local_resolver import action_of, candidates, display, resolve_local
 from .schemas import (CommandResult, NamesResult, SceneResult, TrackedObject, VerifyResult,
                       parse_objects)
 
@@ -75,6 +76,20 @@ def resolve_command(marked_img, objects: list, text: str, context: dict | None =
     return res.model_copy(update={"meta": meta})
 
 
+def select(marked_img, objects: list, text: str, context: dict | None = None, use_local: bool = True) -> CommandResult:
+    """Funzione pubblica: prima la scorciatoia locale, poi Grok.
+
+    Il risultato dice sempre la strada (res.source = "local" | "grok") e la
+    latenza totale (res.meta["latency_ms"]). use_local=False serve alla valutazione.
+    """
+    t0 = time.perf_counter()
+    res = resolve_local(objects, text) if use_local else None
+    if res is None:
+        res = resolve_command(marked_img, objects, text, context)
+    res.meta["latency_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+    return res
+
+
 # ---------------------------------------------------------------------------
 # 3. Descrizione della scena
 # ---------------------------------------------------------------------------
@@ -110,37 +125,20 @@ def verify_action(img_before, img_after, objects_before: list, objects_after: li
 # Risposte finte (GROK_MOCK=1)
 # ---------------------------------------------------------------------------
 
-_VERBS = {"prendi": "pick", "afferra": "pick", "raccogli": "pick", "metti": "place", "posa": "place",
-          "appoggia": "place", "indica": "point", "vai": "go_to", "avvicinati": "go_to", "segui": "follow",
-          "guarda": "look", "inquadra": "look"}
-
-
-def _words(s: str) -> set[str]:
-    return set(re.findall(r"\w+", s.lower()))
-
-
-def _display(o: TrackedObject) -> str:
-    return o.name or " ".join(x for x in (o.label, o.color) if x)
-
-
 def _mock_names(objs: list[TrackedObject]) -> dict:
-    return {"objects": [{"id": o.id, "name": _display(o), "color": o.color} for o in objs]}
+    return {"objects": [{"id": o.id, "name": display(o), "color": o.color} for o in objs]}
 
 
 def _mock_resolve(objs: list[TrackedObject], text: str) -> dict:
-    # ponytail: confronto a parole intere, senza sinonimi; la versione seria è local_resolver (punto 4).
-    words = _words(text)
-    action = next((a for w, a in _VERBS.items() if w in words), "none")
-    scores = {o.id: len(words & _words(f"{o.label} {o.name or ''} {o.color or ''}")) for o in objs}
-    best = max(scores.values())
-    hits = [o for o in objs if best > 0 and scores[o.id] == best]
-    out = {"target_id": None, "destination_id": None, "action": action, "ambiguous": False,
+    # Stesso confronto della scorciatoia locale, ma qui più candidati diventano una domanda.
+    hits = candidates(objs, text) or []
+    out = {"target_id": None, "destination_id": None, "action": action_of(text), "ambiguous": False,
            "question": None, "confidence": 0.0, "reason": ""}
     if len(hits) == 1:
-        out.update(target_id=hits[0].id, confidence=0.9, reason=f"Corrisponde a {_display(hits[0])}.")
+        out.update(target_id=hits[0].id, confidence=0.9, reason=f"Corrisponde a {display(hits[0])}.")
     elif hits:
         out.update(ambiguous=True, confidence=0.5, reason="Più oggetti corrispondono.",
-                   question=" o ".join(_display(o) for o in hits).capitalize() + "?")
+                   question=" o ".join(display(o) for o in hits).capitalize() + "?")
     else:
         out.update(reason="Nessun oggetto corrisponde alla richiesta.")
     return out
@@ -149,7 +147,7 @@ def _mock_resolve(objs: list[TrackedObject], text: str) -> dict:
 def _mock_describe(objs: list[TrackedObject]) -> dict:
     if not objs:
         return {"text": "Non vedo oggetti riconoscibili."}
-    names = [f"{_display(o)} ({o.id})" for o in objs]
+    names = [f"{display(o)} ({o.id})" for o in objs]
     listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " e " + names[-1]
     return {"text": f"Vedo {len(objs)} oggetti: {listed}."}
 

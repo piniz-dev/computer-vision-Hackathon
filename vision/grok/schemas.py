@@ -76,6 +76,7 @@ class CommandResult(Result):
     question: str | None = None    # domanda breve da far pronunciare alla voce se ambiguous
     confidence: float = Field(0.0, ge=0, le=1)
     reason: str = ""
+    source: SkipJsonSchema[Literal["local", "grok"]] = "grok"  # da quale strada è arrivata la risposta
 
 
 class SceneResult(Result):
