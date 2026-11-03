@@ -1,10 +1,12 @@
-"""YOLO-World -> oggetti del gruppo, e sagoma GrabCut (senza modelli né rete)."""
+"""YOLO-World -> oggetti del gruppo, sagoma GrabCut e scelta al robot (senza modelli né rete)."""
+import json
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from vision.grok.geometry import refine_box
+from vision.grok.handoff import TARGET_KEYS, send_selection
 from vision.grok.marks import reacquire
 from vision.grok.open_vocab import ID_OFFSET, load_vocab, save_vocab, to_objects
 
@@ -42,6 +44,19 @@ def test_vocab_round_trip(tmp_path):
     assert load_vocab(path) == vocab
     path.write_text("non json", encoding="utf-8")
     assert load_vocab(path) == {}                      # file rotto: si riparte da zero, senza errori
+
+
+def test_send_selection_writes_whole_file(tmp_path):
+    path = tmp_path / "logs" / "selection.json"
+    obj = {"id": 2003, "label": "pen", "name": "penna blu", "conf": 0.6, "bbox": [0.4, 0.4, 0.05, 0.2],
+           "distance_m": 0.5, "extra": "non va al robot"}
+    msg = send_selection(path, obj, "prendi la penna blu", "pick")
+    assert json.loads(path.read_text(encoding="utf-8")) == msg
+    assert msg["action"] == "pick" and msg["destination_id"] is None and msg["target"]["id"] == 2003
+    assert set(msg["target"]) == set(TARGET_KEYS) and msg["target"]["coords_mm"] is None
+    assert send_selection(path, obj)["action"] == "none"           # click senza comando
+    assert not path.with_suffix(".tmp").exists()                  # rinominato, non lasciato a metà
+    assert send_selection(tmp_path / "logs", obj) is None         # è una cartella: niente eccezioni
 
 
 def test_reacquire_same_label_nearest():

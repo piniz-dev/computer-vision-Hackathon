@@ -5,7 +5,8 @@
   [N]          -> Grok dà un nome breve a tutti gli oggetti numerati
   [S]          -> Scrivi un comando nella finestra (es. 'prendi la penna blu'), Invio per mandarlo
   [D] / SPAZIO -> Grok descrive la scena
-  [Click Sx]   -> Seleziona un oggetto sotto il cursore (sagoma + pannello, JSON nel terminale)
+  [Click Sx]   -> Seleziona un oggetto sotto il cursore (sagoma + pannello); la scelta va al
+                  robot in logs/selection.json (anche da [S] e quando la selezione si riaggancia)
   [Z]          -> Zoom sull'oggetto attualmente selezionato (con S o Click Sx)
   [Click Dx]   -> Dezooma (riporta alla vista panoramica 1.0x, come [0] / [R])
   [C]          -> Dimentica tutto: oggetti di Grok e classi imparate (che altrimenti restano
@@ -54,6 +55,7 @@ from vision.eyes.depth import CLASS_PRIORS_CM, estimate_distance_m, format_dista
 from vision.eyes.marks import draw_marks
 from vision.eyes.pipeline import EyePipeline
 from vision.grok.geometry import refine_box
+from vision.grok.handoff import send_selection
 from vision.grok.local_resolver import display
 from vision.grok.marks import object_at, reacquire
 from vision.grok.open_vocab import OpenVocab, load_vocab, save_vocab
@@ -89,6 +91,7 @@ def display_obj(o: dict) -> str:
 
 
 VOCAB_PATH = LOGS_DIR / "vocab.json"  # classi imparate da Grok, ricaricate al prossimo avvio
+SELECTION_PATH = LOGS_DIR / "selection.json"  # ultima scelta, letta dal braccio (formato in vision/grok/handoff.py)
 
 
 def _learn_size(label: str, size_cm) -> None:
@@ -272,6 +275,7 @@ def main() -> None:
         "sel_last": None,     # ultimo dict dell'oggetto selezionato, per riagganciarlo se cambia id
         "sel_seen": 0.0,      # quando l'abbiamo visto l'ultima volta
         "last_cmd": None,
+        "sel_cmd": {},  # comando/azione dell'ultima scelta, riusati se la selezione si riaggancia
         "typing": None,       # testo del comando mentre lo scrivi (None = non stai scrivendo)
         "help": False,
         "is_busy": False,
@@ -296,16 +300,24 @@ def main() -> None:
     zoom_node = pipeline.nodes.get("arm")
     zoom_mgr = zoom_node.zoom if zoom_node else None
 
-    def select_obj(obj: dict) -> None:
+    def send(obj: dict) -> str:
+        """Scrive la scelta in logs/selection.json per il braccio; restituisce il testo per la barra."""
+        obj["distance_m"] = _distance(obj)
+        msg = send_selection(SELECTION_PATH, obj, **st["sel_cmd"])
+        if msg is None:
+            return "NON inviato al robot (logs/selection.json non scrivibile)"
+        print("\n[ROBOT] logs/selection.json:\n" + json.dumps(msg, ensure_ascii=False, indent=2, default=str))
+        return "inviato al robot"
+
+    def select_obj(obj: dict, command: str | None = None, action: str | None = None,
+                   destination_id: int | None = None) -> str:
         st["selected_id"] = obj["id"]
         st["sel_last"], st["sel_seen"] = obj, time.time()
-        obj["distance_m"] = _distance(obj)
-        set_status(
-            f"Selezionato #{obj['id']}: {display_obj(obj)} - distanza {format_distance(obj['distance_m'])}  "
-            f"(Premi [Z] per zoomare)"
-        )
-        print("\n[ROBOT PICK] Oggetto selezionato da passare al robot:")
-        print(json.dumps(obj, ensure_ascii=False, indent=2))
+        st["sel_cmd"] = {"command": command, "action": action, "destination_id": destination_id}
+        sent = send(obj)
+        set_status(f"Selezionato #{obj['id']}: {display_obj(obj)} - distanza {format_distance(obj['distance_m'])}, "
+                   f"{sent}  (Premi [Z] per zoomare)")
+        return sent
 
     # Handler click del mouse:
     # - Click Sinistro: seleziona l'oggetto sotto il cursore
@@ -408,8 +420,8 @@ def main() -> None:
             if hit is None:
                 return set_status(f"Non trovato: {res.reason}", "err")
             st["last_cmd"] = {"target_id": res.target_id, "action": res.action, "source": res.source}
-            select_obj(hit)
-            set_status(f"'{text}' -> #{hit['id']} {display_obj(hit)}, azione: {res.action}")
+            sent = select_obj(hit, text, res.action, res.destination_id)
+            set_status(f"'{text}' -> #{hit['id']} {display_obj(hit)}, azione: {res.action}, {sent}")
         finally:
             st["is_busy"] = False
 
@@ -468,7 +480,7 @@ def main() -> None:
                         st["last_cmd"]["target_id"] = sel["id"]
                     if zoom_mgr is not None and zoom_mgr.target_id == old:
                         zoom_mgr.set_target_object(sel["id"])
-                    set_status(f"#{sel['id']} riagganciato (prima #{old}): {display_obj(sel)}")
+                    set_status(f"#{sel['id']} riagganciato (prima #{old}): {display_obj(sel)}, {send(sel)}")
             if sel is not None:
                 st["sel_last"], st["sel_seen"] = sel, time.time()
                 fit = refine_box(raw, sel["bbox"])

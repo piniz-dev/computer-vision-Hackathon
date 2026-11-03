@@ -50,10 +50,15 @@ Le funzioni accettano la lista `objects` (dict o `TrackedObject`).
 | | `resolve_command(marked_img, objects, text, context=None)` | comando → `target_id`, `destination_id`, `action` (`pick/place/point/go_to/follow/look/none`), `ambiguous` + `question` da dire a voce, `confidence`, `reason`. `context` = `{"last_selected_id", "last_question"}` |
 | | `describe_scene(img, objects)` | massimo 2 frasi, da leggere a voce |
 | | `verify_action(img_before, img_after, objects_before, objects_after, action, target_id, destination_id=None)` | `success`, `reason`, `suggestion`, `confidence` |
-| | `detect_objects(img, known=None, start_id=1000, max_objects=15)` | Grok trova gli oggetti con il riquadro, anche quelli fuori dalle classi di YOLO (es. una penna). `known` = oggetti già trovati da non ripetere. Id assegnati da noi da `start_id`, riquadri tagliati dentro l'immagine. Stesso formato del gruppo. Riquadri approssimativi e fermi; più lento degli altri compiti (7–15 s via OpenRouter) |
+| | `detect_objects(img, known=None, start_id=1000, max_objects=15, min_conf=0.5)` | Grok trova gli oggetti con il riquadro, anche quelli fuori dalle classi di YOLO (es. una penna), più `tags` e `size_cm` (misura reale stimata). `known` = oggetti già trovati da non ripetere. Id assegnati da noi da `start_id`, riquadri tagliati dentro l'immagine. Scarta i riquadri dubbi (confidenza bassa, troppo piccoli o grandi, doppioni di YOLO, vuoti) con il motivo in `meta["discard_reasons"]`. Riquadri approssimativi e fermi; più lento degli altri compiti (10–15 s via OpenRouter) |
 | | **`select(marked_img, objects, text, context=None, use_local=True)`** | **funzione pubblica**: prima la scorciatoia locale, poi Grok. `res.source` = `"local"` o `"grok"`, `res.meta["latency_ms"]` = latenza totale |
 | `local_resolver.py` | `resolve_local(objects, text)` | confronta la frase con `name`/`label` (sinonimi italiano→inglese delle classi COCO comuni, colori italiani in tutte le forme, id detti a voce "prendi il 3"). Esattamente un oggetto → risultato con `source="local"`, altrimenti `None` |
 | `voice_tools.py` | `TOOLS`, `dispatch(tool_name, args, state)`, `VisionState`, `FakeVisionState(folder)` | strumenti per Grok Voice (vedi sotto) |
+| `open_vocab.py` | `OpenVocab(weights, imgsz=480, conf=0.15)`: `set_classes`, `forget`, `feed`, `objects`, `status` | YOLO-World in un thread suo: segue dal vivo le classi trovate da Grok. Id da 2000 |
+| | `load_vocab(path)`, `save_vocab(path, vocab)` | classi imparate tra una sessione e l'altra (`logs/vocab.json`) |
+| `geometry.py` | `iou(a, b)`, `refine_box(frame, bbox)` | sovrapposizione fra riquadri; sagoma GrabCut dell'oggetto (`None` se il riquadro è vuoto) |
+| `marks.py` | `object_at(objects, x, y)`, `reacquire(objects, last, max_dist=0.25)` | oggetto sotto il click (il più piccolo); stesso oggetto con un id nuovo |
+| `handoff.py` | `send_selection(path, obj, command, action, destination_id)` | scrive la scelta per il braccio in modo atomico (formato sotto, in "Riga di comando") |
 | `cli.py` | `main()` | riga di comando |
 | `eval/` | `make_dataset.py`, `run_eval.py` | dataset sintetico e valutazione |
 
@@ -101,11 +106,27 @@ python demo_live.py            # finestra live (YOLO ONNX + Grok + Zoom)
 python demo_live.py --once     # una foto: YOLO + Grok, salva logs/webcam_marked.jpg
 ```
 
-Nella finestra: YOLO segue dal vivo gli oggetti che conosce; **G** = Grok trova gli altri oggetti
-(riquadri fermi), **N** = Grok dà i nomi, **SPAZIO** / **D** = descrizione, **click** = seleziona l'oggetto
-(stampa il JSON da passare al robot) oppure zoom su sfondo vuoto, **1-9** = zoom su oggetto, **0** = reset zoom,
-**C** = cancella gli oggetti di Grok, **Q** = esci.
+Nella finestra: YOLO segue dal vivo gli oggetti che conosce; **G** = Grok trova gli altri oggetti e
+YOLO-World impara a seguirli dal vivo (penne, matite, anche in mano), **N** = Grok dà i nomi,
+**S** = scrivi un comando (Invio per mandarlo), **SPAZIO** / **D** = descrizione, **click** = seleziona
+(sagoma + pannello), **Z** = zoom sul selezionato, **click destro** / **0** = reset zoom,
+**C** = dimentica tutto, **H** = aiuto, **Q** = esci. Se il tracker cambia id all'oggetto selezionato,
+la selezione si riaggancia da sola (stessa classe, il più vicino, entro 3 s).
 Per `detect_objects` serve `GROK_TIMEOUT` intorno a 30 (con `GROK_REASONING=minimal` ci mette 10-13 s, a volte più di 20).
+
+File che la demo scrive in `logs/`:
+- **`selection.json`**: la scelta per il braccio, riscritta a ogni click, comando **S** o riaggancio.
+  La scrittura è atomica: chi legge non trova mai un file a metà. Il braccio legge il file a intervalli e agisce quando cambia `ts`.
+  ```json
+  {"ts": 1730630000.123, "source": "arm", "command": "prendi la penna blu", "action": "pick", "destination_id": null,
+   "target": {"id": 2003, "label": "pen", "name": "penna blu", "color": "blu", "tags": ["biro"], "conf": 0.61,
+              "bbox": [0.40, 0.40, 0.05, 0.20], "distance_m": 0.48, "coords_mm": null}}
+  ```
+  - `command` è `null` e `action` è `"none"` quando la scelta viene da un click.
+  - `distance_m` è la stima monocolare di Visione A.
+  - `coords_mm` resta `null` finché A non calibra la camera.
+- **`vocab.json`**: le classi imparate con **G**/**N**, `{label: {name, color, tags, size_cm}}`. Al prossimo avvio
+  YOLO-World le segue subito e `size_cm` corregge la distanza. **C** lo svuota.
 
 ## Test
 
