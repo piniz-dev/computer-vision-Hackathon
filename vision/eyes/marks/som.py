@@ -27,6 +27,41 @@ PALETTE: list[tuple[int, int, int]] = [
     (255, 128, 0),
 ]
 
+LABEL_IT: dict[str, str] = {
+    "person": "persona",
+    "dog": "cane",
+    "cat": "gatto",
+    "cup": "tazza",
+    "bottle": "bottiglia",
+    "wine glass": "bicchiere",
+    "fork": "forchetta",
+    "knife": "coltello",
+    "spoon": "cucchiaio",
+    "bowl": "ciotola",
+    "chair": "sedia",
+    "couch": "divano",
+    "potted plant": "pianta",
+    "bed": "letto",
+    "dining table": "tavolo",
+    "tv": "televisore",
+    "laptop": "computer",
+    "mouse": "mouse",
+    "remote": "telecomando",
+    "keyboard": "tastiera",
+    "cell phone": "telefono",
+    "book": "libro",
+    "clock": "orologio",
+    "scissors": "forbici",
+    "pen": "penna",
+    "pencil": "matita",
+    "backpack": "zaino",
+    "umbrella": "ombrello",
+    "handbag": "borsa",
+    "suitcase": "valigia",
+    "sports ball": "palla",
+    "box": "scatola",
+}
+
 
 def _coerce_objects(objects: Sequence[EyeObject | dict]) -> list[EyeObject]:
     out: list[EyeObject] = []
@@ -45,20 +80,29 @@ def draw_marks(
     objects: Sequence[EyeObject | dict],
     show_grasp: bool = False,
     safety_stop: bool = False,
+    show_labels: bool = True,
+    min_conf: float = 0.0,
+    show_conf: bool = False,
 ) -> np.ndarray:
-    """Restituisce una copia di `frame` con riquadri e badge numerici (Set-of-Mark).
+    """Restituisce una copia di `frame` con riquadri e badge numerici/etichette (Set-of-Mark).
 
     - `frame`: immagine BGR originale (non viene modificata in-place).
     - `objects`: lista di `EyeObject` o `dict` nel formato del gruppo.
     - `show_grasp`: se True e `coords_mm` è presente, disegna anche il centro e l'asse di presa.
     - `safety_stop`: se True, disegna un bordo rosso di allerta sicurezza.
+    - `show_labels`: se True, mostra sia l'ID sia il nome/classe dell'oggetto (es. [1] persona).
+    - `min_conf`: soglia minima di accuratezza/confidenza [0.0 - 1.0] per visualizzare il riquadro.
+    - `show_conf`: se True, mostra la percentuale di confidenza (es. [1] persona 87%).
     """
     out = frame.copy()
     h, w = out.shape[:2]
     thick = max(2, round(min(h, w) / 300))
-    scale = max(0.6, min(h, w) / 600)
+    scale = max(0.55, min(h, w) / 700)
 
     for o in _coerce_objects(objects):
+        if o.conf < min_conf:
+            continue
+
         x, y, bw, bh = o.bbox
         x1, y1 = int(x * w), int(y * h)
         x2, y2 = int((x + bw) * w), int((y + bh) * h)
@@ -77,12 +121,25 @@ def draw_marks(
             cv2.line(out, (cx - dx, cy - dy), (cx + dx, cy + dy), color, max(1, thick - 1), cv2.LINE_AA)
             cv2.circle(out, (cx, cy), max(3, thick + 1), color, -1)
 
-        # Badge Set-of-Mark con solo il numero ID ad alto contrasto
-        text = str(o.id)
+        # Testo del badge: ID + etichetta riconoscibile + eventuale confidenza
+        conf_str = f" {int(round(o.conf * 100))}%" if show_conf else ""
+        if show_labels:
+            if o.name:
+                lbl = o.name
+            else:
+                base_lbl = LABEL_IT.get(o.label.lower(), o.label)
+                if o.color and o.color not in base_lbl:
+                    lbl = f"{base_lbl} {o.color}"
+                else:
+                    lbl = base_lbl
+            text = f"[{o.id}] {lbl}{conf_str}"
+        else:
+            text = f"{o.id}{conf_str}"
+
         (tw, th), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, thick)
-        ty = y1 if y1 - th - base - 4 < 0 else y1 - th - base - 4
-        bx2 = min(w - 1, x1 + tw + 6)
-        by2 = min(h - 1, ty + th + base + 4)
+        ty = y1 if y1 - th - base - 6 < 0 else y1 - th - base - 6
+        bx2 = min(w - 1, x1 + tw + 8)
+        by2 = min(h - 1, ty + th + base + 6)
         cv2.rectangle(out, (x1, ty), (bx2, by2), color, -1)
 
         b, g, r = color
@@ -90,11 +147,11 @@ def draw_marks(
         cv2.putText(
             out,
             text,
-            (x1 + 3, ty + th + 2),
+            (x1 + 4, ty + th + 3),
             cv2.FONT_HERSHEY_SIMPLEX,
             scale,
             ink,
-            thick,
+            max(1, thick - 1),
             cv2.LINE_AA,
         )
 

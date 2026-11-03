@@ -55,6 +55,10 @@ class EyePipeline:
         use_mock_tracker: bool | None = None,
         calibration_file: str | Path | None = None,
         calibrator: ArmCalibrator | None = None,
+        model_name: str | None = None,
+        conf_threshold: float = 0.40,
+        ema_alpha: float = 0.70,
+        min_hits: int = 1,
     ) -> SourceNode:
         """Configura e registra una sorgente (`arm` o `dog`)."""
         if calibrator is None and calibration_file is not None and Path(calibration_file).exists():
@@ -63,7 +67,14 @@ class EyePipeline:
             calibrator = ArmCalibrator()
 
         calib_fn = calibrator.compute_object_coords if (calibrator and source == "arm") else None
-        tracker = ObjectTracker(use_mock=use_mock_tracker, calibrator_fn=calib_fn)
+        tracker = ObjectTracker(
+            model_name=model_name,
+            conf_threshold=conf_threshold,
+            use_mock=use_mock_tracker,
+            calibrator_fn=calib_fn,
+            ema_alpha=ema_alpha,
+            min_hits=min_hits,
+        )
         reader = VideoReader(source_name=source, mode=mode, target=target, fps=self.fps)
         dog_nav = DogNavigator() if source == "dog" else None
 
@@ -77,7 +88,12 @@ class EyePipeline:
         self.nodes[source] = node
         return node
 
-    def step(self, source: str) -> FramePayload:
+    def step(
+        self,
+        source: str,
+        min_display_conf: float = 0.0,
+        show_conf: bool = False,
+    ) -> FramePayload:
         """Esegue un singolo ciclo completo di percezione per la sorgente indicata."""
         if source not in self.nodes:
             raise KeyError(f"Sorgente '{source}' non registrata nella pipeline.")
@@ -102,6 +118,8 @@ class EyePipeline:
             objects,
             show_grasp=apply_calib,
             safety_stop=safety_stop,
+            min_conf=min_display_conf,
+            show_conf=show_conf,
         )
 
         return self.state.update(

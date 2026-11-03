@@ -85,11 +85,38 @@ def test_tracking_stable_ids_and_color():
 def test_set_of_mark_does_not_mutate_raw():
     raw = make_synthetic_frame(0)
     raw_copy = raw.copy()
-    objs = [EyeObject(id=3, label="cup", conf=0.9, bbox=(0.2, 0.2, 0.15, 0.2), color="rosso")]
-    marked = draw_marks(raw, objs)
+    objs = [
+        EyeObject(id=3, label="cup", conf=0.88, bbox=(0.2, 0.2, 0.15, 0.2), color="rosso"),
+        EyeObject(id=4, label="pen", conf=0.45, bbox=(0.5, 0.5, 0.05, 0.1), color="blu"),
+    ]
+    marked = draw_marks(raw, objs, min_conf=0.60, show_conf=True)
 
     assert np.array_equal(raw, raw_copy), "Il frame raw non deve essere modificato in-place"
     assert not np.array_equal(raw, marked), "Il frame marcato deve contenere i riquadri disegnati"
+
+    # Con min_conf=0.95 nessun oggetto deve essere disegnato -> frame intatto
+    marked_none = draw_marks(raw, objs, min_conf=0.95)
+    assert np.array_equal(raw, marked_none)
+
+
+def test_tracker_smoothing_and_min_hits():
+    # Tracker con smoothing ed eliminazione flickering (min_hits=2)
+    tracker = SimpleByteTracker(ema_alpha=0.5, min_hits=2)
+    dets1 = [("cup", 0.9, (0.20, 0.20, 0.10, 0.10))]
+    dets2 = [("cup", 0.9, (0.24, 0.22, 0.10, 0.10))]
+
+    # Al frame 1 ha hits=1 < min_hits, quindi non viene ancora emesso (anti-flicker)
+    out1 = tracker.update(dets1)
+    assert len(out1) == 0
+
+    # Al frame 2 ha hits=2 >= min_hits, viene emesso con coordinate smoothed
+    out2 = tracker.update(dets2)
+    assert len(out2) == 1
+    tid, label, conf, box = out2[0]
+    assert tid == 1
+    # Coordinate mediate tra (0.20, 0.20) e (0.24, 0.22) -> (0.22, 0.21)
+    assert abs(box[0] - 0.22) < 0.01
+    assert abs(box[1] - 0.21) < 0.01
 
 
 def test_aruco_calibration_homography_and_grasp_angle(tmp_path: Path):

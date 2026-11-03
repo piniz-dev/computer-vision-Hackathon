@@ -45,28 +45,37 @@ def compute_iou(box_a: tuple[float, float, float, float], box_b: tuple[float, fl
 
 
 def estimate_dominant_color_it(frame_bgr: np.ndarray, bbox: tuple[float, float, float, float]) -> str | None:
-    """Stima il colore dominante dell'oggetto in italiano usando lo spazio HSV."""
+    """Stima il colore dominante dell'oggetto in italiano usando lo spazio HSV.
+    
+    Campiona la zona centrale (40%) escludendo bordi e pixel con saturazione
+    troppo bassa o luminosità estrema (riflessi/sfondo).
+    """
     h_img, w_img = frame_bgr.shape[:2]
     x, y, w, h = bbox
-    # Ritaglia la regione centrale (50%) dell'oggetto per evitare lo sfondo ai bordi
-    cx1 = max(0, int((x + 0.25 * w) * w_img))
-    cy1 = max(0, int((y + 0.25 * h) * h_img))
-    cx2 = min(w_img, int((x + 0.75 * w) * w_img))
-    cy2 = min(h_img, int((y + 0.75 * h) * h_img))
+    cx1 = max(0, int((x + 0.30 * w) * w_img))
+    cy1 = max(0, int((y + 0.30 * h) * h_img))
+    cx2 = min(w_img, int((x + 0.70 * w) * w_img))
+    cy2 = min(h_img, int((y + 0.70 * h) * h_img))
 
     if cx2 <= cx1 or cy2 <= cy1:
         return None
 
     roi = frame_bgr[cy1:cy2, cx1:cx2]
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-    mean_h = float(np.median(hsv[:, :, 0]))
-    mean_s = float(np.median(hsv[:, :, 1]))
-    mean_v = float(np.median(hsv[:, :, 2]))
+    
+    # Filtra pixel con saturazione e valore validi (evita rumore e riflessi di luce)
+    valid_mask = (hsv[:, :, 1] > 40) & (hsv[:, :, 2] > 45)
+    
+    if np.count_nonzero(valid_mask) < 20:
+        mean_v = float(np.mean(hsv[:, :, 2]))
+        if mean_v < 50:
+            return "nero"
+        if mean_v > 190:
+            return "bianco"
+        return "grigio"
 
-    if mean_v < 45:
-        return "nero"
-    if mean_s < 35:
-        return "bianco" if mean_v > 195 else "grigio"
+    valid_h = hsv[:, :, 0][valid_mask]
+    mean_h = float(np.median(valid_h))
 
     # Hue in OpenCV è [0, 179]
     if mean_h < 10 or mean_h >= 165:
@@ -91,20 +100,34 @@ class _TrackSlot:
     bbox: tuple[float, float, float, float]
     conf: float
     missed: int = 0
+    hits: int = 1
 
 
 class SimpleByteTracker:
-    """Tracker stile ByteTrack a due stadi (alta/bassa confidenza + IoU) per ID stabili."""
+    """Tracker stile ByteTrack a due stadi con EMA smoothing e filtro di persistenza."""
 
-    def __init__(self, iou_threshold: float = 0.25, max_missed: int = 15):
+    def __init__(self, iou_threshold: float = 0.25, max_missed: int = 15, ema_alpha: float = 0.65, min_hits: int = 1):
         self.iou_threshold = iou_threshold
         self.max_missed = max_missed
+        self.ema_alpha = ema_alpha  # 1.0 = nessun smoothing, 0.5 = smoothing marcato
+        self.min_hits = min_hits
         self._next_id: int = 1
         self._tracks: dict[int, _TrackSlot] = {}
 
     def reset(self) -> None:
         self._next_id = 1
         self._tracks.clear()
+
+    def _smooth_bbox(self, old_box: tuple[float, float, float, float], new_box: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+        a = self.ema_alpha
+        ox, oy, ow, oh = old_box
+        nx, ny, nw, nh = new_box
+        return (
+            round(a * nx + (1.0 - a) * ox, 4),
+            round(a * ny + (1.0 - a) * oy, 4),
+            round(a * nw + (1.0 - a) * ow, 4),
+            round(a * nh + (1.0 - a) * oh, 4),
+        )
 
     def update(
         self,
@@ -123,7 +146,6 @@ class SimpleByteTracker:
         for trk_id, trk in self._tracks.items():
             for d_idx, (label, _conf, bbox) in enumerate(detections):
                 iou = compute_iou(trk.bbox, bbox)
-                # Bonus se la classe coincide
                 score = iou + (0.1 if trk.label == label and iou > 0.05 else 0.0)
                 if iou >= self.iou_threshold:
                     candidates.append((score, trk_id, d_idx))
@@ -134,13 +156,15 @@ class SimpleByteTracker:
                 continue
             label, conf, bbox = detections[d_idx]
             trk = self._tracks[trk_id]
-            trk.bbox = bbox
+            trk.bbox = self._smooth_bbox(trk.bbox, bbox)
             trk.conf = conf
             trk.label = label
             trk.missed = 0
+            trk.hits += 1
             assigned_trk.add(trk_id)
             assigned_det.add(d_idx)
-            results.append((trk_id, label, conf, bbox))
+            if trk.hits >= self.min_hits:
+                results.append((trk_id, label, conf, trk.bbox))
 
         # Nuove tracce per le detection non associate
         for d_idx, (label, conf, bbox) in enumerate(detections):
@@ -148,8 +172,9 @@ class SimpleByteTracker:
                 continue
             new_id = self._next_id
             self._next_id += 1
-            self._tracks[new_id] = _TrackSlot(track_id=new_id, label=label, bbox=bbox, conf=conf, missed=0)
-            results.append((new_id, label, conf, bbox))
+            self._tracks[new_id] = _TrackSlot(track_id=new_id, label=label, bbox=bbox, conf=conf, missed=0, hits=1)
+            if self.min_hits <= 1:
+                results.append((new_id, label, conf, bbox))
 
         # Rimuovi tracce perse da troppi frame
         stale = [tid for tid, trk in self._tracks.items() if trk.missed > self.max_missed]
@@ -169,11 +194,17 @@ class ObjectTracker:
         conf_threshold: float = 0.40,
         use_mock: bool | None = None,
         calibrator_fn: Callable[[np.ndarray, tuple[float, float, float, float]], CoordsMM | None] | None = None,
+        ema_alpha: float = 0.70,
+        min_hits: int = 1,
     ):
         self.model_name = model_name or os.getenv("YOLO_MODEL", "yolov8n.pt")
         self.conf_threshold = conf_threshold
         self.calibrator_fn = calibrator_fn
-        self._fallback_tracker = SimpleByteTracker()
+        self.ema_alpha = ema_alpha
+        self.min_hits = min_hits
+        self._fallback_tracker = SimpleByteTracker(ema_alpha=ema_alpha, min_hits=min_hits)
+        # Smoothing anche per le coordinate YOLO
+        self._yolo_smoothed_boxes: dict[int, tuple[float, float, float, float]] = {}
         # Memoria dei nomi/colori assegnati da Grok per ciascun ID tracciato
         self._custom_names: dict[int, tuple[str | None, str | None]] = {}
 
@@ -190,6 +221,22 @@ class ObjectTracker:
             except Exception:
                 # Se ultralytics non è installato o il modello non è presente offline, usa il tracker locale
                 self.use_mock = True
+
+    def _smooth_yolo_bbox(self, obj_id: int, bbox: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+        if obj_id not in self._yolo_smoothed_boxes:
+            self._yolo_smoothed_boxes[obj_id] = bbox
+            return bbox
+        ox, oy, ow, oh = self._yolo_smoothed_boxes[obj_id]
+        nx, ny, nw, nh = bbox
+        a = self.ema_alpha
+        smoothed = (
+            round(a * nx + (1.0 - a) * ox, 4),
+            round(a * ny + (1.0 - a) * oy, 4),
+            round(a * nw + (1.0 - a) * ow, 4),
+            round(a * nh + (1.0 - a) * oh, 4),
+        )
+        self._yolo_smoothed_boxes[obj_id] = smoothed
+        return smoothed
 
     def set_object_metadata(self, obj_id: int, name: str | None = None, color: str | None = None) -> None:
         """Salva nome descrittivo e colore (es. ricevuti da `name_objects` di Grok) per l'ID specificato."""
@@ -274,7 +321,8 @@ class ObjectTracker:
                         label = str(r.names.get(int(clss[i]), "object"))
                         conf = float(confs[i])
                         if ids is not None:
-                            tracked_items.append((int(ids[i]), label, conf, bbox))
+                            smooth_b = self._smooth_yolo_bbox(int(ids[i]), bbox)
+                            tracked_items.append((int(ids[i]), label, conf, smooth_b))
                         else:
                             raw_for_fallback.append((label, conf, bbox))
 
