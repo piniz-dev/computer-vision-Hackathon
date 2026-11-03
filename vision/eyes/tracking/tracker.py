@@ -18,6 +18,7 @@ from typing import Callable
 import cv2
 import numpy as np
 
+from ..depth.estimator import DepthSmoother
 from ..schemas import CoordsMM, EyeObject
 
 COCO_CLASSES = [
@@ -216,6 +217,7 @@ class ObjectTracker:
         self.ema_alpha = ema_alpha
         self.min_hits = min_hits
         self._fallback_tracker = SimpleByteTracker(ema_alpha=ema_alpha, min_hits=min_hits)
+        self._depth_smoother = DepthSmoother(alpha=0.35)
         # Smoothing anche per le coordinate YOLO
         self._yolo_smoothed_boxes: dict[int, tuple[float, float, float, float]] = {}
         # Memoria dei nomi/colori assegnati da Grok per ciascun ID tracciato
@@ -426,6 +428,7 @@ class ObjectTracker:
             coords_mm = None
             if apply_calibration and self.calibrator_fn is not None:
                 coords_mm = self.calibrator_fn(frame_bgr, bbox)
+            dist_m = self._depth_smoother.update(obj_id, label, bbox)
 
             eye_objects.append(
                 EyeObject(
@@ -436,6 +439,7 @@ class ObjectTracker:
                     bbox=bbox,
                     color=saved_color or detected_color,
                     coords_mm=coords_mm,
+                    distance_m=dist_m,
                 )
             )
 

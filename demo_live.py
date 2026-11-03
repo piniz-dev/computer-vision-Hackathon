@@ -48,6 +48,7 @@ load_dotenv(_env_path)
 if not os.getenv("XAI_API_KEY") and not os.getenv("OPENROUTER_API_KEY") and not os.getenv("GROK_MOCK"):
     os.environ["GROK_MOCK"] = "1"
 
+from vision.eyes.depth import estimate_distance_m, format_distance
 from vision.eyes.marks import draw_marks
 from vision.eyes.pipeline import EyePipeline
 from vision.grok.local_resolver import display
@@ -154,10 +155,15 @@ def main() -> None:
 
         print(f"[Demo Once] YOLO ha rilevato {len(yolo_objs)} oggetti. Invio a Grok...")
         res = detect_objects(raw_frame, known=yolo_objs)
-        grok_objs = [o.model_dump() for o in res.objects] if res.ok else []
+        grok_objs = []
+        if res.ok:
+            for o in res.objects:
+                d = o.model_dump()
+                d["distance_m"] = estimate_distance_m(d["label"], d["bbox"])
+                grok_objs.append(d)
         all_objs = yolo_objs + grok_objs
 
-        marked = draw_marks(raw_frame, all_objs)
+        marked = draw_marks(raw_frame, all_objs, show_conf=show_conf, show_dist=True)
         LOGS_DIR.mkdir(exist_ok=True)
         out_path = LOGS_DIR / "webcam_marked.jpg"
         cv2.imwrite(str(out_path), marked)
@@ -169,7 +175,8 @@ def main() -> None:
             print(f" Latenza Grok: {res.meta.get('latency_ms', 0):.0f} ms")
         print("=" * 60)
         for o in all_objs:
-            print(f"  #{o['id']:<4} {o['label']:<15} {display_obj(o)} | bbox={[round(v, 2) for v in o['bbox']]}")
+            dist_txt = format_distance(o.get("distance_m") or estimate_distance_m(o["label"], o["bbox"]))
+            print(f"  #{o['id']:<4} {o['label']:<15} {display_obj(o)} | dist={dist_txt:<6} | bbox={[round(v, 2) for v in o['bbox']]}")
         print(f"\nImmagine salvata in: {out_path.resolve()}\n")
         pipeline.stop()
         return
@@ -218,7 +225,10 @@ def main() -> None:
         if clicked_obj is not None:
             st["selected_id"] = clicked_obj["id"]
             lbl = clicked_obj.get("name") or clicked_obj.get("label", "oggetto")
-            st["status_msg"] = f"Selezionato ID #{clicked_obj['id']} ({lbl})"
+            dist_val = clicked_obj.get("distance_m") or estimate_distance_m(clicked_obj.get("label", "object"), clicked_obj["bbox"])
+            clicked_obj["distance_m"] = dist_val
+            dist_txt = format_distance(dist_val)
+            st["status_msg"] = f"Selezionato ID #{clicked_obj['id']} ({lbl}) - Distanza: {dist_txt}"
             print("\n[ROBOT PICK] Oggetto selezionato da passare al robot:")
             print(json.dumps(clicked_obj, ensure_ascii=False, indent=2))
         elif zoom_mgr is not None:
@@ -233,7 +243,12 @@ def main() -> None:
         try:
             res = detect_objects(raw_frame, known=yolo_objs)
             if res.ok:
-                st["grok_objects"] = [o.model_dump() for o in res.objects]
+                enriched = []
+                for o in res.objects:
+                    d = o.model_dump()
+                    d["distance_m"] = estimate_distance_m(d["label"], d["bbox"])
+                    enriched.append(d)
+                st["grok_objects"] = enriched
                 lat = res.meta.get("latency_ms", 0) if res.meta else 0
                 st["status_msg"] = f"Grok ha trovato {len(res.objects)} oggetti"
                 st["latency_msg"] = f"Lat: {lat:.0f} ms (grok)"

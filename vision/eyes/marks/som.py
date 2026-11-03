@@ -11,6 +11,7 @@ from typing import Sequence
 import cv2
 import numpy as np
 
+from ..depth.estimator import estimate_distance_m, format_distance
 from ..schemas import EyeObject
 
 # Tavolozza BGR coerente con vision.grok.marks
@@ -83,6 +84,7 @@ def draw_marks(
     show_labels: bool = True,
     min_conf: float = 0.0,
     show_conf: bool = False,
+    show_dist: bool = True,
 ) -> np.ndarray:
     """Restituisce una copia di `frame` con riquadri e badge numerici/etichette (Set-of-Mark).
 
@@ -93,6 +95,7 @@ def draw_marks(
     - `show_labels`: se True, mostra sia l'ID sia il nome/classe dell'oggetto (es. [1] persona).
     - `min_conf`: soglia minima di accuratezza/confidenza [0.0 - 1.0] per visualizzare il riquadro.
     - `show_conf`: se True, mostra la percentuale di confidenza (es. [1] persona 87%).
+    - `show_dist`: se True, mostra la distanza approssimativa accanto al label (es. ~45cm o ~1.8m).
     """
     out = frame.copy()
     h, w = out.shape[:2]
@@ -121,8 +124,10 @@ def draw_marks(
             cv2.line(out, (cx - dx, cy - dy), (cx + dx, cy + dy), color, max(1, thick - 1), cv2.LINE_AA)
             cv2.circle(out, (cx, cy), max(3, thick + 1), color, -1)
 
-        # Testo del badge: ID + etichetta riconoscibile + eventuale confidenza
+        # Testo del badge: ID + etichetta riconoscibile + eventuale confidenza + distanza
         conf_str = f" {int(round(o.conf * 100))}%" if show_conf else ""
+        dist_val = o.distance_m if o.distance_m is not None else estimate_distance_m(o.label, o.bbox)
+        dist_str = f" {format_distance(dist_val)}" if (show_dist and dist_val) else ""
         if show_labels:
             if o.name:
                 lbl = o.name
@@ -132,9 +137,9 @@ def draw_marks(
                     lbl = f"{base_lbl} {o.color}"
                 else:
                     lbl = base_lbl
-            text = f"[{o.id}] {lbl}{conf_str}"
+            text = f"[{o.id}] {lbl}{conf_str}{dist_str}"
         else:
-            text = f"{o.id}{conf_str}"
+            text = f"{o.id}{conf_str}{dist_str}"
 
         (tw, th), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, thick)
         ty = y1 if y1 - th - base - 6 < 0 else y1 - th - base - 6

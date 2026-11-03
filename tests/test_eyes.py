@@ -14,6 +14,7 @@ from vision.eyes.calibration import (
     render_aruco_workspace,
 )
 from vision.eyes.capture import VideoReader, generate_sample_video, make_synthetic_frame
+from vision.eyes.depth import DepthSmoother, estimate_distance_m, format_distance
 from vision.eyes.dog import DogNavigator, check_person_safety_stop, compute_dog_telemetry
 from vision.eyes.marks import draw_marks
 from vision.eyes.pipeline import EyePipeline
@@ -322,3 +323,33 @@ def test_digital_zoom_manager():
         zoom.step()
     assert abs(zoom.current_factor - 1.0) < 0.05
     assert not zoom.is_active()
+
+
+def test_depth_estimation_and_badge():
+    # Bottiglia grande (vicina) vs piccola (lontana)
+    d_near = estimate_distance_m("bottle", (0.4, 0.2, 0.15, 0.55))
+    d_far = estimate_distance_m("bottle", (0.4, 0.4, 0.05, 0.15))
+    assert d_near < d_far
+    assert 0.2 <= d_near <= 1.0
+    assert d_far > 1.0
+
+    # Formattazione cm e metri
+    assert format_distance(0.44) == "~45cm"
+    assert format_distance(1.62) == "~1.6m"
+
+    # Persona mezzo busto davanti alla webcam (tocca il fondo e larga)
+    d_person_desk = estimate_distance_m("person", (0.2, 0.15, 0.60, 0.82))
+    assert 0.4 <= d_person_desk <= 1.2
+
+    # Smoothing
+    smoother = DepthSmoother(alpha=0.5)
+    s1 = smoother.update(1, "cup", (0.3, 0.3, 0.2, 0.25))
+    s2 = smoother.update(1, "cup", (0.3, 0.3, 0.1, 0.12))
+    assert s1 < s2
+
+    # Verifica che ObjectTracker popoli distance_m
+    tracker = ObjectTracker(use_mock=True)
+    frame = make_synthetic_frame(0)
+    objs = tracker.process_frame(frame)
+    assert len(objs) > 0
+    assert all(o.distance_m is not None and o.distance_m > 0 for o in objs)

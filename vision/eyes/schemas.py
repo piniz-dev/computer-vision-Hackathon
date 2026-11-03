@@ -27,6 +27,7 @@ class EyeObject(BaseModel):
     bbox: tuple[float, float, float, float]  # (x, y, w, h) normalizzati 0-1
     color: str | None = None
     coords_mm: CoordsMM | None = None
+    distance_m: float | None = Field(default=None, description="Stima distanza approssimativa dalla camera in metri")
 
     @field_validator("bbox")
     @classmethod
