@@ -58,6 +58,24 @@ Compito: descrivi la scena in "text" con al massimo 2 frasi brevi in italiano, a
 lette a voce. Cita gli oggetti principali e, quando aiuta a sceglierli, il loro numero."""
 
 
+def detect_objects(known: list[TrackedObject], max_objects: int) -> str:
+    skip = (f"Questi oggetti sono già stati trovati, NON ripeterli: {objects_block(known)}\n"
+            if known else "")
+    return (
+        "Sei il sistema di visione di un robot. Rispondi SOLO con JSON, senza testo prima o dopo.\n\n"
+        + skip
+        + f"""Compito: trova nell'immagine gli oggetti fisici distinti e ben visibili (al massimo {max_objects}),
+quelli che si potrebbero indicare o afferrare. Ignora superfici e sfondo (pareti, pavimento, soffitto, piano del tavolo).
+Per ogni oggetto:
+- label: classe breve in inglese, minuscola (es. stile COCO)
+- name: nome breve in italiano (2-5 parole) con colore e attributi utili a distinguerlo
+- color: colore principale, una parola italiana (null se non si capisce)
+- conf: quanto sei sicuro, da 0 a 1
+- bbox: [x, y, larghezza, altezza] normalizzati 0-1 rispetto all'immagine intera, origine in alto
+  a sinistra, riquadro stretto attorno all'oggetto."""
+    )
+
+
 def verify_action(objs_before: list[TrackedObject], objs_after: list[TrackedObject], action: str,
                   target_id: int, destination_id: int | None) -> str:
     dest = f", destinazione oggetto {destination_id}" if destination_id is not None else ""

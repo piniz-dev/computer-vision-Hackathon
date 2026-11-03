@@ -83,6 +83,20 @@ class SceneResult(Result):
     text: str = ""                 # massimo 2 frasi, da leggere a voce
 
 
+class DetectedObject(GrokModel):
+    """Oggetto trovato da Grok. Stessi campi di TrackedObject: l'id lo assegniamo noi."""
+    id: SkipJsonSchema[int] = 0
+    label: str                     # classe breve in inglese, minuscola (stile COCO)
+    name: str                      # nome italiano di 2-5 parole
+    color: str | None
+    conf: float = Field(ge=0, le=1)
+    bbox: list[float] = Field(min_length=4, max_length=4)  # x, y, w, h normalizzati 0-1
+
+
+class DetectResult(Result):
+    objects: list[DetectedObject] = []
+
+
 class VerifyResult(Result):
     success: bool = False
     reason: str = ""

@@ -49,6 +49,7 @@ Le funzioni accettano la lista `objects` (dict o `TrackedObject`).
 | | `resolve_command(marked_img, objects, text, context=None)` | comando → `target_id`, `destination_id`, `action` (`pick/place/point/go_to/follow/look/none`), `ambiguous` + `question` da dire a voce, `confidence`, `reason`. `context` = `{"last_selected_id", "last_question"}` |
 | | `describe_scene(img, objects)` | massimo 2 frasi, da leggere a voce |
 | | `verify_action(img_before, img_after, objects_before, objects_after, action, target_id, destination_id=None)` | `success`, `reason`, `suggestion`, `confidence` |
+| | `detect_objects(img, known=None, start_id=1000, max_objects=15)` | Grok trova gli oggetti con il riquadro, anche quelli fuori dalle classi di YOLO (es. una penna). `known` = oggetti già trovati da non ripetere. Id assegnati da noi da `start_id`, riquadri tagliati dentro l'immagine. Stesso formato del gruppo. Riquadri approssimativi e fermi; più lento degli altri compiti (7–15 s via OpenRouter) |
 | | **`select(marked_img, objects, text, context=None, use_local=True)`** | **funzione pubblica**: prima la scorciatoia locale, poi Grok. `res.source` = `"local"` o `"grok"`, `res.meta["latency_ms"]` = latenza totale |
 | `local_resolver.py` | `resolve_local(objects, text)` | confronta la frase con `name`/`label` (sinonimi italiano→inglese delle classi COCO comuni, colori italiani in tutte le forme, id detti a voce "prendi il 3"). Esattamente un oggetto → risultato con `source="local"`, altrimenti `None` |
 | `voice_tools.py` | `TOOLS`, `dispatch(tool_name, args, state)`, `VisionState`, `FakeVisionState(folder)` | strumenti per Grok Voice (vedi sotto) |
@@ -92,12 +93,17 @@ python -m vision.grok.cli verify   --before A.jpg --after B.jpg --objects-before
 Le immagini sono frame originali (i numeri li disegna `draw_marks`). Esce con 0 se `ok`, 1 altrimenti.
 Prova senza chiave: `GROK_MOCK=1` (PowerShell: `$env:GROK_MOCK=1`).
 
-Prova con la webcam del PC (Grok descrive cosa vede, senza YOLO):
+Prova con la webcam del PC (usa il tracker YOLO di Visione A se `ultralytics` è installato):
 
 ```bash
-python -m vision.grok.webcam_demo            # finestra live: SPAZIO = chiedi a Grok, Q = esci
-python -m vision.grok.webcam_demo --once     # una foto, risposta nel terminale
+python -m vision.grok.webcam_demo            # finestra live
+python -m vision.grok.webcam_demo --once     # una foto: YOLO + Grok, salva logs/webcam_marked.jpg
 ```
+
+Nella finestra: YOLO segue dal vivo gli oggetti che conosce; **G** = Grok trova gli altri oggetti
+(riquadri fermi), **N** = Grok dà i nomi, **SPAZIO** = descrizione, **click** = seleziona l'oggetto
+(stampa il JSON da passare al robot), **C** = cancella gli oggetti di Grok, **Q** = esci.
+Per `detect_objects` serve `GROK_TIMEOUT` intorno a 20.
 
 ## Test
 
