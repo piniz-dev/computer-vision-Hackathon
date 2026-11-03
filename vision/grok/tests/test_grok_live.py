@@ -6,7 +6,7 @@ import pytest
 
 from vision.grok.geometry import refine_box
 from vision.grok.marks import reacquire
-from vision.grok.open_vocab import ID_OFFSET, to_objects
+from vision.grok.open_vocab import ID_OFFSET, load_vocab, save_vocab, to_objects
 
 
 class _T:  # finto tensore torch
@@ -32,6 +32,16 @@ def test_to_objects():
     o = objs[0]
     assert o["id"] == ID_OFFSET + 3 and o["label"] == "pen" and o["bbox"] == pytest.approx([0.1, 0.1, 0.1, 0.3])
     assert to_objects(_result(None)) == []  # nessun id di tracking: non ancora confermato
+
+
+def test_vocab_round_trip(tmp_path):
+    vocab = {"pen": {"name": "penna blu", "color": "blu", "tags": ["biro"], "size_cm": [14.0, 1.5]}}
+    path = tmp_path / "logs" / "vocab.json"
+    assert load_vocab(path) == {}                      # al primo avvio non c'è
+    save_vocab(path, vocab)
+    assert load_vocab(path) == vocab
+    path.write_text("non json", encoding="utf-8")
+    assert load_vocab(path) == {}                      # file rotto: si riparte da zero, senza errori
 
 
 def test_reacquire_same_label_nearest():

@@ -11,12 +11,32 @@ frame disponibile, così il video non rallenta.
 """
 from __future__ import annotations
 
+import json
 import threading
 import time
+from pathlib import Path
 
 import numpy as np
 
 ID_OFFSET = 2000  # YOLO di Visione A usa id < 1000, detect_objects da 1000
+
+
+def load_vocab(path: Path) -> dict:
+    """Classi imparate nelle sessioni precedenti: {label: {name, color, tags, size_cm}}. {} se manca."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_vocab(path: Path, vocab: dict) -> None:
+    path = Path(path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(vocab, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass  # non salvare il vocabolario non deve fermare la demo
 
 
 def to_objects(result, max_area: float = 0.5) -> list[dict]:
@@ -53,6 +73,10 @@ class OpenVocab:
         if labels != self.classes:
             self._pending = labels
 
+    def forget(self) -> None:
+        """Dimentica tutte le classi: YOLO-World smette di cercare finché non arrivano classi nuove."""
+        self._pending = []
+
     def feed(self, frame: np.ndarray) -> None:
         self._frame = frame
 
@@ -67,11 +91,12 @@ class OpenVocab:
         while True:
             if self._pending is not None:
                 classes, self._pending = self._pending, None
-                self.status = "imparo: " + ", ".join(classes)
-                model.set_classes(classes)
+                if classes:
+                    self.status = "imparo: " + ", ".join(classes)
+                    model.set_classes(classes)
                 model.predictor = None  # nuove classi: riparte il tracking
                 self.classes, self.objects = classes, []
-                self.status = "segue: " + ", ".join(classes)
+                self.status = "segue: " + ", ".join(classes) if classes else "pronto (premi G)"
             frame, self._frame = self._frame, None
             if frame is None or not self.classes:
                 time.sleep(0.02)

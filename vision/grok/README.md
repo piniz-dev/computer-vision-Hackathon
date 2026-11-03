@@ -23,7 +23,8 @@ copy .env.example .env            # Linux/macOS: cp .env.example .env
 | `XAI_BASE_URL` | `https://api.x.ai/v1` | endpoint compatibile OpenAI. OpenRouter: `https://openrouter.ai/api/v1` |
 | `XAI_MODEL` | `grok-4.7` | modello con input di immagini. Su OpenRouter: `x-ai/grok-4.7` (accetta immagini, `response_format` e `structured_outputs`) |
 | `GROK_MOCK` | `0` | `1` = modalità finta: risposte deterministiche, nessuna chiamata di rete |
-| `GROK_TIMEOUT` | `8` | secondi massimi per chiamata (con il nuovo tentativo, al massimo il doppio) |
+| `GROK_TIMEOUT` | `8` | secondi massimi per chiamata, nuovo tentativo compreso (limite vero, anche se il server tiene viva la connessione) |
+| `GROK_REASONING` | `minimal` | quanto ragiona Grok 4.x (non si può spegnere): `minimal`, `low`, `medium`, `high`; vuoto = default del modello. Mandato solo a OpenRouter (`reasoning.effort`). Misura su `detect_objects`: default 29-55 s, `low` 14 s, `minimal` 10 s |
 
 ## Formato degli oggetti (deciso dal gruppo)
 
@@ -104,7 +105,7 @@ Nella finestra: YOLO segue dal vivo gli oggetti che conosce; **G** = Grok trova 
 (riquadri fermi), **N** = Grok dà i nomi, **SPAZIO** / **D** = descrizione, **click** = seleziona l'oggetto
 (stampa il JSON da passare al robot) oppure zoom su sfondo vuoto, **1-9** = zoom su oggetto, **0** = reset zoom,
 **C** = cancella gli oggetti di Grok, **Q** = esci.
-Per `detect_objects` serve `GROK_TIMEOUT` intorno a 20.
+Per `detect_objects` serve `GROK_TIMEOUT` intorno a 30 (con `GROK_REASONING=minimal` ci mette 10-13 s, a volte più di 20).
 
 ## Test
 
@@ -161,7 +162,10 @@ Da ripetere con la chiave xAI diretta (`api.x.ai`):
 
 ## Limiti noti
 
-- Timeout per chiamata = `GROK_TIMEOUT`, ma con il nuovo tentativo il caso peggiore è il doppio (16 s di default).
+- Timeout per chiamata = `GROK_TIMEOUT`, nuovo tentativo compreso. Una chiamata scaduta continua in background
+  finché il server risponde (costa token, non blocca nulla).
+- Con la chiave xAI diretta `GROK_REASONING` non viene mandato: nome e valori del parametro su `api.x.ai`
+  sono da verificare.
 - La scorciatoia locale non gestisce negazioni ("non la rossa"), plurali e verbi inglesi; i sinonimi sono solo
   le classi COCO più comuni (le altre parole funzionano se compaiono in `name` o `label`).
 - Il contesto della conversazione vocale (`voice_tools._context`) è uno solo per processo: un utente alla volta.

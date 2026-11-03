@@ -5,6 +5,16 @@ import cv2
 import numpy as np
 
 
+def iou(a, b) -> float:
+    """Intersection over Union tra due bbox [x, y, w, h] (stessa unità)."""
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    iw = max(0.0, min(ax + aw, bx + bw) - max(ax, bx))
+    ih = max(0.0, min(ay + ah, by + bh) - max(ay, by))
+    union = aw * ah + bw * bh - iw * ih
+    return iw * ih / union if union > 0 else 0.0
+
+
 def refine_box(frame: np.ndarray, bbox, max_side: int = 160):
     """(bbox stretto, contorno in pixel del frame) oppure None se nel riquadro non c'è un oggetto
     distinguibile dallo sfondo. bbox = [x, y, w, h] normalizzati 0-1."""

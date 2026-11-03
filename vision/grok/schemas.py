@@ -94,6 +94,7 @@ class DetectedObject(GrokModel):
     tags: list[str] = []           # sinonimi e attributi
     conf: float = Field(ge=0, le=1)
     bbox: list[float] = Field(min_length=4, max_length=4)  # x, y, w, h normalizzati 0-1
+    size_cm: list[float] | None = Field(None, min_length=2, max_length=2)  # [altezza, larghezza] reali stimate
 
 
 class DetectResult(Result):

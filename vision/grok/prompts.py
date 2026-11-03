@@ -78,7 +78,9 @@ Per ogni oggetto:
   aggiungi un attributo solo se serve a distinguerlo da un oggetto uguale
 - color: colore principale, una parola italiana (null se non si capisce)
 - tags: altre parole italiane con cui chiamarlo (sinonimi, parti, forma, materiale), massimo 5
-- conf: quanto sei sicuro, da 0 a 1
+- conf: probabilità reale che l'oggetto ci sia davvero, da 0 a 1. Non includere oggetti sotto 0.5:
+  meglio un oggetto in meno che uno inventato
+- size_cm: [altezza, larghezza] reali dell'oggetto stimate in centimetri (null se non stimabile)
 - bbox: [x, y, larghezza, altezza] normalizzati 0-1 rispetto all'immagine intera, origine in alto
   a sinistra, riquadro stretto attorno all'oggetto."""
     )

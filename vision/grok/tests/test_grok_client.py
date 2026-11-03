@@ -1,6 +1,7 @@
 """Client: codifica immagini, nuovo tentativo, timeout, JSON non valido, ripiego su json_object, log."""
 import base64
 import json
+import time
 
 import cv2
 import numpy as np
@@ -71,7 +72,34 @@ def test_real_path_timeout_then_ok(monkeypatch):
     monkeypatch.setattr(client, "_call_api", fake_api)
     r, meta = ask_json([np.zeros((10, 10, 3), np.uint8)], "p", S, timeout=1.5)
     assert r.text == "ok" and meta["attempts"] == 2 and meta["tokens"]["completion"] == 2
-    assert calls == [1.5, 1.5]
+    assert 1.4 < calls[0] <= 1.5 and 1.0 < calls[1] <= calls[0]  # il secondo tentativo ha il tempo rimasto
+
+
+def test_real_path_deadline_is_total(monkeypatch):
+    # Il timeout dell'SDK non scatta se il server tiene viva la connessione: lo imponiamo noi.
+    monkeypatch.setenv("GROK_MOCK", "0")
+    monkeypatch.setattr(client, "_call_api", lambda *a: time.sleep(3))
+    r, meta = ask_json([], "p", S, timeout=0.3)
+    assert r is None and meta["error"] == "timeout" and meta["latency_ms"] < 1000
+
+
+def test_reasoning_effort_sent_to_openrouter(monkeypatch):
+    sent = {}
+
+    class Fake:
+        def create(self, **kw):
+            sent.update(kw)
+            msg = type("M", (), {"content": '{"text": "ok"}'})
+            return type("R", (), {"usage": None, "choices": [type("C", (), {"message": msg})]})
+
+    monkeypatch.setattr(client, "_get_client", lambda: type("Cl", (), {"chat": type("Ch", (), {"completions": Fake()})}))
+    monkeypatch.setattr(client, "BASE_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.delenv("GROK_REASONING", raising=False)
+    client._call_api([], S, True, 5)
+    assert sent["extra_body"] == {"reasoning": {"effort": "minimal"}}
+    monkeypatch.setattr(client, "BASE_URL", "https://api.x.ai/v1")
+    client._call_api([], S, True, 5)
+    assert sent["extra_body"] is None
 
 
 def test_real_path_falls_back_to_json_object(monkeypatch):

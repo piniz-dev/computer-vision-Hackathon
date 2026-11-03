@@ -14,6 +14,7 @@ import time
 
 from . import prompts
 from .client import ask_json
+from .geometry import iou, refine_box
 from .local_resolver import action_of, candidates, display, resolve_local
 from .schemas import (CommandResult, DetectResult, NamesResult, SceneResult, TrackedObject, VerifyResult,
                       parse_objects)
@@ -126,25 +127,40 @@ def verify_action(img_before, img_after, objects_before: list, objects_after: li
 # ---------------------------------------------------------------------------
 
 @_never_raise(DetectResult)
-def detect_objects(img, known: list | None = None, start_id: int = 1000, max_objects: int = 15) -> DetectResult:
+def detect_objects(img, known: list | None = None, start_id: int = 1000, max_objects: int = 15,
+                   min_conf: float = 0.5) -> DetectResult:
     """Grok trova gli oggetti nell'immagine con il loro riquadro, anche quelli fuori dalle classi di YOLO.
 
     known:    oggetti già trovati (es. da YOLO) che Grok non deve ripetere.
     start_id: gli id li assegniamo noi, consecutivi da qui (lontani da quelli del tracker).
     Gli oggetti restituiti hanno lo stesso formato del gruppo (id, label, name, conf, bbox, color).
     I riquadri di Grok sono approssimativi e fermi: valgono per il frame inviato.
+    La conf di un LLM non è calibrata, quindi scartiamo noi i riquadri sospetti; il motivo di
+    ogni scarto finisce in meta["discard_reasons"].
     """
-    res, meta = ask_json([img], prompts.detect_objects(parse_objects(known or []), max_objects), DetectResult,
+    known = parse_objects(known or [])
+    res, meta = ask_json([img], prompts.detect_objects(known, max_objects), DetectResult,
                          task="detect_objects", mock=_mock_detect)
     if res is None:
         return DetectResult(ok=False, error=meta["error"], meta=meta)
-    kept = []
+    check_crop = not meta.get("mock")  # la scena finta è uniforme: GrabCut scarterebbe tutto
+    kept, reasons = [], []
     for o in res.objects[:max_objects]:
         x, y, w, h = (min(max(v, 0.0), 1.0) for v in o.bbox)
         w, h = min(w, 1 - x), min(h, 1 - y)  # il riquadro resta dentro l'immagine
-        if w > 0.01 and h > 0.01:
-            kept.append(o.model_copy(update={"id": start_id + len(kept), "bbox": [x, y, w, h]}))
+        box = [x, y, w, h]
+        why = ("confidenza bassa" if o.conf < min_conf
+               else "troppo piccolo" if w <= 0.01 or h <= 0.01 or w * h < 0.002
+               else "troppo grande" if w * h > 0.5
+               else "doppione di YOLO" if any(iou(box, k.bbox) > 0.5 for k in known)
+               else "riquadro vuoto" if check_crop and refine_box(img, box) is None
+               else None)
+        if why:
+            reasons.append(f"{o.name or o.label}: {why}")
+        else:
+            kept.append(o.model_copy(update={"id": start_id + len(kept), "bbox": box}))
     meta["discarded"] = len(res.objects) - len(kept)
+    meta["discard_reasons"] = reasons
     return res.model_copy(update={"objects": kept, "meta": meta})
 
 

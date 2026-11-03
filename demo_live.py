@@ -9,7 +9,8 @@
                   Sullo sfondo:  ZOOM DIGITALE sul punto cliccato
   [1-9]        -> Zoom e tracking automatico sull'oggetto con quell'ID
   [0] / [R]    -> Reset zoom
-  [C]          -> Cancella gli oggetti trovati da Grok
+  [C]          -> Dimentica tutto: oggetti di Grok e classi imparate (che altrimenti restano
+                  in logs/vocab.json e tornano al prossimo avvio)
   [K]          -> Mostra/nascondi percentuale di confidenza
   [+] / [-]    -> Alza/abbassa la soglia minima di confidenza (+/- 5%)
   [T]          -> Imposta target per il cane robotico
@@ -50,13 +51,13 @@ load_dotenv(_env_path)
 if not os.getenv("XAI_API_KEY") and not os.getenv("OPENROUTER_API_KEY") and not os.getenv("GROK_MOCK"):
     os.environ["GROK_MOCK"] = "1"
 
-from vision.eyes.depth import estimate_distance_m, format_distance
+from vision.eyes.depth import CLASS_PRIORS_CM, estimate_distance_m, format_distance
 from vision.eyes.marks import draw_marks
 from vision.eyes.pipeline import EyePipeline
 from vision.grok.geometry import refine_box
 from vision.grok.local_resolver import display
 from vision.grok.marks import object_at, reacquire
-from vision.grok.open_vocab import OpenVocab
+from vision.grok.open_vocab import OpenVocab, load_vocab, save_vocab
 from vision.grok.schemas import TrackedObject
 from vision.grok.tasks import describe_scene, detect_objects, name_objects, select
 
@@ -71,7 +72,7 @@ HELP = [
     "D/Spazio  descrivi la scena",
     "Click   seleziona oggetto / zoom sullo sfondo",
     "1-9     zoom su oggetto    0/R  reset zoom",
-    "C       cancella oggetti di Grok",
+    "C       dimentica tutto (oggetti di Grok e classi imparate)",
     "+/-     soglia confidenza    K  mostra %",
     "T       target cane",
     "H       chiudi aiuto    Q/Esc  esci",
@@ -85,6 +86,17 @@ def _ascii(s: str) -> str:
 
 def display_obj(o: dict) -> str:
     return display(TrackedObject.model_validate(o))
+
+
+VOCAB_PATH = LOGS_DIR / "vocab.json"  # classi imparate da Grok, ricaricate al prossimo avvio
+
+
+def _learn_size(label: str, size_cm) -> None:
+    """Misura reale stimata da Grok -> tabella delle misure della stima di distanza di Visione A.
+    ponytail: scriviamo nel dict di A in memoria (setdefault: le loro misure restano); se A
+    aggiunge un modo ufficiale per registrare misure, usare quello."""
+    if size_cm and len(size_cm) == 2 and all(v > 0 for v in size_cm):
+        CLASS_PRIORS_CM.setdefault(label.strip().lower(), (float(size_cm[0]), float(size_cm[1])))
 
 
 def _distance(o: dict) -> float | None:
@@ -216,6 +228,7 @@ def main() -> None:
         grok_objs = []
         if res.ok:
             for o in res.objects:
+                _learn_size(o.label, o.size_cm)
                 d = o.model_dump()
                 d["distance_m"] = estimate_distance_m(d["label"], d["bbox"])
                 grok_objs.append(d)
@@ -231,6 +244,10 @@ def main() -> None:
         print(f" YOLO: {len(yolo_objs)} oggetti | Grok: {len(grok_objs)} oggetti")
         if res.meta:
             print(f" Latenza Grok: {res.meta.get('latency_ms', 0):.0f} ms")
+            for why in res.meta.get("discard_reasons", []):
+                print(f" Scartato: {why}")
+        if not res.ok:
+            print(f" Errore Grok: {res.error}")
         print("=" * 60)
         for o in all_objs:
             dist_txt = format_distance(_distance(o))
@@ -250,7 +267,7 @@ def main() -> None:
         "grok_objects": [],   # riquadri fermi di Grok (finché YOLO-World non segue quella classe)
         "objects": [],        # tutti gli oggetti dell'ultimo frame
         "meta": {},           # id -> {name, color, tags} dati da Grok (N)
-        "label_meta": {},     # label -> {name, color, tags}: nomi per gli oggetti di YOLO-World
+        "label_meta": load_vocab(VOCAB_PATH),  # label -> {name, color, tags, size_cm}, anche dalle sessioni prima
         "selected_id": None,
         "sel_last": None,     # ultimo dict dell'oggetto selezionato, per riagganciarlo se cambia id
         "sel_seen": 0.0,      # quando l'abbiamo visto l'ultima volta
@@ -265,6 +282,13 @@ def main() -> None:
 
     def set_status(msg: str, kind: str = "ok") -> None:
         st["status"] = (msg, kind)
+
+    # Classi imparate nelle sessioni precedenti: YOLO-World le segue subito, senza premere G
+    for label, m in st["label_meta"].items():
+        _learn_size(label, m.get("size_cm"))
+    if ov and st["label_meta"]:
+        ov.set_classes(st["label_meta"])
+        set_status(f"Ricordo {', '.join(st['label_meta'])}: le seguo dal vivo. C = dimentica tutto, H = aiuto.")
 
     def latency(res) -> str:
         return f"{res.meta.get('latency_ms', 0) / 1000:.1f} s" if res.meta else ""
@@ -316,14 +340,21 @@ def main() -> None:
             res = detect_objects(raw_frame, known=yolo_objs)
             if not res.ok:
                 return set_status(f"Errore Grok: {res.error}", "err")
+            for o in res.objects:
+                _learn_size(o.label, o.size_cm)
+                st["label_meta"].setdefault(o.label, {"name": o.name, "color": o.color, "tags": o.tags,
+                                                      "size_cm": o.size_cm})
+            save_vocab(VOCAB_PATH, st["label_meta"])
             st["grok_objects"] = [dict(o.model_dump(), distance_m=estimate_distance_m(o.label, o.bbox))
                                   for o in res.objects]
-            for o in res.objects:
-                st["label_meta"].setdefault(o.label, {"name": o.name, "color": o.color, "tags": o.tags})
             names = ", ".join(o.name for o in res.objects) or "nessuno"
             if ov and res.objects:
                 ov.set_classes(o.label for o in res.objects)
                 names += ". YOLO-World ora li segue dal vivo"
+            dropped = res.meta.get("discard_reasons", [])
+            if dropped:
+                names += f" (scartati {len(dropped)} riquadri dubbi)"
+                print("[Grok] scartati: " + "; ".join(dropped))
             set_status(f"Grok ha trovato {len(res.objects)} oggetti: {names}")
             st["latency_msg"] = latency(res)
         finally:
@@ -348,12 +379,14 @@ def main() -> None:
                 meta = {"name": n.name, "color": n.color, "tags": n.tags}
                 st["meta"][n.id] = meta
                 if n.id >= 2000:  # gli id di YOLO-World cambiano se perde l'oggetto: ricorda per classe
-                    st["label_meta"][by_id[n.id]["label"]] = meta
+                    lbl = by_id[n.id]["label"]
+                    st["label_meta"][lbl] = {**st["label_meta"].get(lbl, {}), **meta}  # tiene size_cm
                 if node and n.id < 1000:
                     node.tracker.set_object_metadata(n.id, name=n.name, color=n.color)
                 for go in st["grok_objects"]:
                     if go["id"] == n.id:
                         go.update(meta)
+            save_vocab(VOCAB_PATH, st["label_meta"])
             set_status("Nomi: " + (", ".join(f"#{n.id} {n.name}" for n in res.objects) or "nessuno"))
             st["latency_msg"] = latency(res)
         finally:
@@ -387,6 +420,7 @@ def main() -> None:
 
     t_prev = time.perf_counter()
     fps_smooth = 30.0
+    win_shown = False  # la finestra può risultare "non visibile" nei primi frame: non è la X
 
     try:
         while True:
@@ -462,8 +496,10 @@ def main() -> None:
 
             cv2.imshow(WIN, frame_display)
             key = cv2.waitKey(15) & 0xFF
-            if cv2.getWindowProperty(WIN, cv2.WND_PROP_VISIBLE) < 1:  # chiusa con la X
+            visible = cv2.getWindowProperty(WIN, cv2.WND_PROP_VISIBLE) >= 1
+            if win_shown and not visible:  # chiusa con la X
                 break
+            win_shown = win_shown or visible
             if key == 255:
                 continue
 
@@ -505,10 +541,13 @@ def main() -> None:
             elif key in (ord("s"), ord("S")):
                 st["typing"], st["help"] = "", False
 
-            # Cancella oggetti Grok [C]
+            # Dimentica tutto [C]: oggetti di Grok, classi di YOLO-World e vocab.json
             elif key in (ord("c"), ord("C")):
-                st["grok_objects"] = []
-                set_status("Oggetti di Grok rimossi dalla scena.")
+                st["grok_objects"], st["label_meta"] = [], {}
+                if ov:
+                    ov.forget()
+                save_vocab(VOCAB_PATH, {})
+                set_status("Dimenticato tutto: oggetti di Grok e classi imparate. G = ricomincia.")
 
             # Toggle confidenza nel badge [K]
             elif key in (ord("k"), ord("K")):

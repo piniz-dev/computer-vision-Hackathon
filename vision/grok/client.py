@@ -8,13 +8,16 @@ Configurazione da `.env`:
   XAI_BASE_URL  endpoint compatibile OpenAI (default xAI; per OpenRouter https://openrouter.ai/api/v1)
   XAI_MODEL     modello con input immagini (default grok-4.7; su OpenRouter x-ai/grok-4.7)
   GROK_MOCK=1   modalità finta: nessuna chiamata di rete
-  GROK_TIMEOUT  secondi massimi per chiamata (default 8)
+  GROK_TIMEOUT  secondi massimi per chiamata, tentativi compresi (default 8)
+  GROK_REASONING  quanto ragiona il modello: minimal (default), low, medium, high; vuoto = default
+                  del modello. Grok 4.x ragiona sempre: con minimal detect_objects passa da ~29 s a ~10 s
 """
 from __future__ import annotations
 
 import base64
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -77,15 +80,45 @@ def _call_api(content: list, schema: type[BaseModel], use_schema: bool, timeout:
                "json_schema": {"name": schema.__name__, "schema": schema.model_json_schema(), "strict": True}}
     else:
         fmt = {"type": "json_object"}
+    effort = os.getenv("GROK_REASONING", "minimal")
+    # Parametro unificato di OpenRouter. Su xAI diretto il nome e i valori accettati cambiano
+    # per modello: lì non lo mandiamo finché non lo verifichiamo con la chiave xAI.
+    extra = {"reasoning": {"effort": effort}} if effort and "openrouter" in BASE_URL else None
     resp = _get_client().chat.completions.create(
         model=os.getenv("XAI_MODEL", DEFAULT_MODEL),
         messages=[{"role": "user", "content": content}],
         response_format=fmt,
         timeout=timeout,
+        extra_body=extra,
     )
     usage = resp.usage
     tokens = {"prompt": usage.prompt_tokens, "completion": usage.completion_tokens} if usage else None
     return resp.choices[0].message.content or "", tokens
+
+
+def _with_deadline(fn: Callable[[], Any], seconds: float) -> Any:
+    """Esegue fn() e solleva TimeoutError se non finisce entro `seconds`.
+
+    Serve perché il timeout dell'SDK vale tra un pacchetto e l'altro: OpenRouter tiene viva
+    la connessione mentre il modello ragiona, e una chiamata può durare un minuto.
+    ponytail: la chiamata abbandonata finisce da sola in un thread daemon (costa token, non blocca).
+    """
+    box: dict[str, Any] = {}
+
+    def run() -> None:
+        try:
+            box["out"] = fn()
+        except BaseException as e:  # noqa: BLE001 - la rilanciamo nel thread del chiamante
+            box["err"] = e
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(seconds)
+    if t.is_alive():
+        raise TimeoutError
+    if "err" in box:
+        raise box["err"]
+    return box["out"]
 
 
 def _log(entry: dict) -> None:
@@ -130,7 +163,12 @@ def ask_json(
         content = None
         meta["error"] = f"immagine non valida: {e}"
 
+    deadline = t0 + timeout  # tempo massimo per tutta la chiamata, nuovo tentativo compreso
     while content is not None and meta["attempts"] < 2:  # 1 tentativo + 1 nuovo tentativo
+        left = deadline - time.perf_counter()
+        if not meta["mock"] and left <= 0:
+            meta["error"] = "timeout"
+            break
         meta["attempts"] += 1
         use_schema = _schema_supported
         meta["mode"] = "json_schema" if use_schema else "json_object"
@@ -146,7 +184,8 @@ def ask_json(
                 out = mock()
                 raw = out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
             else:
-                raw, meta["tokens"] = _call_api(content + [{"type": "text", "text": text}], schema, use_schema, timeout)
+                msgs = content + [{"type": "text", "text": text}]
+                raw, meta["tokens"] = _with_deadline(lambda: _call_api(msgs, schema, use_schema, left), left)
             result = schema.model_validate_json(raw)
             meta["error"] = None
             break

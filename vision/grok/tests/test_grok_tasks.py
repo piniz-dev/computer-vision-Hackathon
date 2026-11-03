@@ -76,10 +76,29 @@ def test_detect_objects_assigns_ids_and_fixes_boxes(monkeypatch, img):
     _grok_answers(monkeypatch, DetectResult(objects=[det([0.1, 0.1, 0.2, 0.2]),
                                                       det([0.9, 0.9, 0.5, 0.5]),     # esce dall'immagine: tagliato
                                                       det([1.2, 0.5, 0.1, 0.1])]))  # fuori: scartato
+    monkeypatch.setattr(tasks, "refine_box", lambda im, box: (box, None))  # l'immagine di test è uniforme
     r = tasks.detect_objects(img, start_id=100)
     assert r.ok and [o.id for o in r.objects] == [100, 101] and r.meta["discarded"] == 1
     assert r.objects[1].bbox == pytest.approx([0.9, 0.9, 0.1, 0.1])
-    assert set(r.objects[0].model_dump()) == {"id", "label", "name", "color", "tags", "conf", "bbox"}  # formato del gruppo
+    assert set(r.objects[0].model_dump()) == {"id", "label", "name", "color", "tags", "conf", "bbox", "size_cm"}  # formato del gruppo
+
+
+def test_detect_objects_drops_suspicious_boxes(monkeypatch, img, objs):
+    det = lambda name, bbox, conf=0.8: DetectedObject(label="pen", name=name, color=None, conf=conf, bbox=bbox)
+    _grok_answers(monkeypatch, DetectResult(objects=[
+        det("buona", [0.40, 0.40, 0.10, 0.20]),
+        det("dubbia", [0.40, 0.70, 0.10, 0.20], conf=0.3),
+        det("puntino", [0.10, 0.80, 0.02, 0.02]),
+        det("enorme", [0.00, 0.00, 0.90, 0.90]),
+        det("doppia", [0.10, 0.10, 0.20, 0.20]),       # stessa posizione della tazza 3 di YOLO
+        det("vuota", [0.70, 0.10, 0.10, 0.20]),
+    ]))
+    monkeypatch.setattr(tasks, "refine_box", lambda im, box: None if box[0] == 0.70 else (box, None))
+    r = tasks.detect_objects(img, known=objs)
+    assert [o.name for o in r.objects] == ["buona"] and r.meta["discarded"] == 5
+    assert r.meta["discard_reasons"] == ["dubbia: confidenza bassa", "puntino: troppo piccolo",
+                                         "enorme: troppo grande", "doppia: doppione di YOLO",
+                                         "vuota: riquadro vuoto"]
 
 
 def test_detect_objects_mock_and_failure(monkeypatch, img):
