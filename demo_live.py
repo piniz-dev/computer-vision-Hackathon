@@ -48,9 +48,10 @@ load_dotenv(_env_path)
 if not os.getenv("XAI_API_KEY") and not os.getenv("OPENROUTER_API_KEY") and not os.getenv("GROK_MOCK"):
     os.environ["GROK_MOCK"] = "1"
 
+from vision.eyes.marks import draw_marks
 from vision.eyes.pipeline import EyePipeline
 from vision.grok.local_resolver import display
-from vision.grok.marks import draw_marks, object_at
+from vision.grok.marks import object_at
 from vision.grok.schemas import TrackedObject
 from vision.grok.tasks import describe_scene, detect_objects, name_objects, select
 
