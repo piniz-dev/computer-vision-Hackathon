@@ -1,0 +1,6 @@
+openai
+pydantic>=2
+opencv-python
+numpy
+python-dotenv
+pytest
