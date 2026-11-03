@@ -22,6 +22,7 @@ from vision.eyes.server import create_app
 from vision.eyes.state import LiveVisionState
 from vision.eyes.tracking import ObjectTracker, SimpleByteTracker, estimate_dominant_color_it
 from vision.eyes.verification import check_appearance, check_disappearance, verify_action_local
+from vision.eyes.zoom import DigitalZoomManager, CropWindow
 from vision.grok.schemas import parse_objects
 from vision.grok.voice_tools import VisionState, dispatch
 
@@ -284,3 +285,40 @@ def test_fastapi_server_endpoints_and_websocket(monkeypatch):
             assert msg["source"] == "arm"
             assert isinstance(msg["objects"], list)
             assert len(msg["objects"]) >= 3
+
+
+def test_digital_zoom_manager():
+    zoom = DigitalZoomManager(lerp_alpha=0.5, min_factor=1.0, max_factor=4.0)
+    assert not zoom.is_active()
+
+    # Zoom su punto centrale (0.5, 0.5) con fattore 2.0x
+    zoom.zoom_to_point(0.5, 0.5, factor=2.0)
+    assert zoom.is_active()
+
+    # Step di interpolazione fluida
+    for _ in range(10):
+        zoom.step()
+
+    # Il fattore corrente deve avvicinarsi a 2.0x
+    assert abs(zoom.current_factor - 2.0) < 0.05
+
+    # Test coordinate mapping bidirezionale
+    zx, zy = zoom.full_to_zoomed_coords(0.5, 0.5)
+    assert abs(zx - 0.5) < 0.05
+    assert abs(zy - 0.5) < 0.05
+
+    fx, fy = zoom.zoomed_to_full_coords(zx, zy)
+    assert abs(fx - 0.5) < 0.01
+    assert abs(fy - 0.5) < 0.01
+
+    # Applicazione su un frame reale (480x640)
+    dummy_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    cropped = zoom.apply(dummy_frame)
+    assert cropped.shape == (480, 640, 3)
+
+    # Test reset
+    zoom.reset()
+    for _ in range(15):
+        zoom.step()
+    assert abs(zoom.current_factor - 1.0) < 0.05
+    assert not zoom.is_active()

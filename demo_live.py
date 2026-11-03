@@ -49,14 +49,17 @@ def _draw_hud(
     total_objs: int = 0,
     shown_objs: int = 0,
     show_conf: bool = True,
+    zoom_factor: float = 1.0,
+    zoom_target_id: int | None = None,
 ):
     h, w = frame.shape[:2]
     # Barra superiore con comandi e statistiche real-time
     cv2.rectangle(frame, (0, 0), (w, 38), (20, 20, 20), -1)
-    hud_keys = "[D] Descrivi | [S] Seleziona | [N] Nomi | [+/-] Soglia | [C] Conf | [Q] Esci"
-    cv2.putText(frame, hud_keys, (10, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (0, 230, 255), 1, cv2.LINE_AA)
+    hud_keys = "[D] Descrivi | [S] Seleziona | [1-9] Zoom Obj | [0] Reset Zoom | [+/-] Soglia | [C] Conf | [Q] Esci"
+    cv2.putText(frame, hud_keys, (10, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 230, 255), 1, cv2.LINE_AA)
 
-    stats_str = f"FPS: {fps_val:.1f} | Soglia Acc: {int(min_conf*100)}% | Visti: {shown_objs}/{total_objs}"
+    zoom_str = f"Zoom: {zoom_factor:.1f}x" + (f" [#{zoom_target_id}]" if zoom_target_id is not None else "")
+    stats_str = f"FPS: {fps_val:.1f} | {zoom_str} | Soglia Acc: {int(min_conf*100)}% | Visti: {shown_objs}/{total_objs}"
     cv2.putText(frame, stats_str, (10, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 255, 120), 1, cv2.LINE_AA)
 
     # Box inferiore con risposta di Grok / Stato
@@ -160,11 +163,34 @@ def main():
     print("   [D] -> Chiedi a Grok di descrivere la scena")
     print("   [S] -> Seleziona oggetto (es. 'prendi la bottiglia')")
     print("   [N] -> Battezza oggetti con name_objects")
+    print("   [1-9] -> Zoom sull'oggetto con quell'ID")
+    print("   [0] o [R] -> Reset Zoom panoramico")
+    print("   [Click Mouse] -> Zoom sul punto cliccato")
     print("   [+] o [=] -> Aumenta soglia accuratezza (+5%)")
     print("   [-] o [_] -> Diminuisci soglia accuratezza (-5%)")
     print("   [C] -> Mostra/nascondi percentuale confidenza")
     print("   [Q] o ESC -> Esci")
     print("=" * 60 + "\n")
+
+    zoom_node = pipeline.nodes.get("arm")
+    zoom_mgr = zoom_node.zoom if zoom_node else None
+
+    # Callback mouse per zoom interattivo
+    def on_mouse_click(event, x, y, flags, param):
+        nonlocal status_msg
+        if event == cv2.EVENT_LBUTTONDOWN and zoom_mgr is not None:
+            # Ricava dimensioni finestra
+            win_h, win_w = 480, 640
+            node_r = zoom_node.reader if zoom_node else None
+            if node_r and node_r.width and node_r.height:
+                win_w, win_h = node_r.width, node_r.height
+            nx = float(x) / max(1, win_w)
+            ny = float(y) / max(1, win_h)
+            fx, fy = zoom_mgr.zoomed_to_full_coords(nx, ny)
+            zoom_mgr.zoom_to_point(fx, fy, factor=2.5)
+            status_msg = f"Zoom al 2.5x su coordinate ({fx:.2f}, {fy:.2f})"
+
+    cv2.setMouseCallback(window_name, on_mouse_click)
 
     t_prev = time.perf_counter()
     fps_smooth = 30.0
@@ -186,6 +212,9 @@ def main():
             total_objs = len(objs)
             shown_objs = sum(1 for o in objs if o.get("conf", 0.0) >= min_conf)
 
+            cur_zoom = zoom_mgr.current_factor if zoom_mgr else 1.0
+            cur_target_id = zoom_mgr.target_id if zoom_mgr else None
+
             display_frame = marked.copy()
             busy_txt = " [Chiamata in corso...] " if is_busy else ""
             _draw_hud(
@@ -198,6 +227,8 @@ def main():
                 total_objs=total_objs,
                 shown_objs=shown_objs,
                 show_conf=show_conf,
+                zoom_factor=cur_zoom,
+                zoom_target_id=cur_target_id,
             )
 
             cv2.imshow(window_name, display_frame)
@@ -205,6 +236,24 @@ def main():
 
             if key in (27, ord("q"), ord("Q")):
                 break
+
+            elif ord("1") <= key <= ord("9"):
+                target_num = key - ord("0")
+                if zoom_mgr is not None:
+                    # Cerca se l'oggetto esiste
+                    matched = [o for o in objs if o.get("id") == target_num]
+                    if matched:
+                        zoom_mgr.set_target_object(target_num)
+                        zoom_mgr.zoom_to_bbox(matched[0]["bbox"])
+                        status_msg = f"Zoom agganciato su Oggetto #{target_num} ({matched[0].get('label', '')})"
+                    else:
+                        zoom_mgr.set_target_object(target_num)
+                        status_msg = f"Target Zoom impostato su #{target_num} (in attesa di rilevamento)"
+
+            elif key in (ord("0"), ord("r"), ord("R")):
+                if zoom_mgr is not None:
+                    zoom_mgr.reset()
+                    status_msg = "Zoom resettato a visuale panoramica (1.0x)"
 
             elif key in (ord("+"), ord("="), ord("]")):
                 min_conf = min(0.95, round(min_conf + 0.05, 2))

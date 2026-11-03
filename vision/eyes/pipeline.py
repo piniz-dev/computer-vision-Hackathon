@@ -22,6 +22,7 @@ from .marks.som import draw_marks
 from .schemas import FramePayload
 from .state.vision_state import LiveVisionState
 from .tracking.tracker import ObjectTracker
+from .zoom.manager import DigitalZoomManager
 
 
 @dataclass
@@ -31,6 +32,7 @@ class SourceNode:
     tracker: ObjectTracker
     calibrator: ArmCalibrator | None = None
     dog_navigator: DogNavigator | None = None
+    zoom: DigitalZoomManager | None = None
 
 
 class EyePipeline:
@@ -77,6 +79,7 @@ class EyePipeline:
         )
         reader = VideoReader(source_name=source, mode=mode, target=target, fps=self.fps)
         dog_nav = DogNavigator() if source == "dog" else None
+        zoom_mgr = DigitalZoomManager()
 
         node = SourceNode(
             source=source,
@@ -84,6 +87,7 @@ class EyePipeline:
             tracker=tracker,
             calibrator=calibrator,
             dog_navigator=dog_nav,
+            zoom=zoom_mgr,
         )
         self.nodes[source] = node
         return node
@@ -121,6 +125,10 @@ class EyePipeline:
             min_conf=min_display_conf,
             show_conf=show_conf,
         )
+
+        if node.zoom is not None and node.zoom.is_active():
+            node.zoom.update_with_tracked_objects(objects)
+            marked = node.zoom.apply(marked)
 
         return self.state.update(
             source=source,
