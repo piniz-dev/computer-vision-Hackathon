@@ -52,7 +52,6 @@ from vision.grok.marks import object_at, reacquire
 from vision.grok.open_vocab import OpenVocab, load_vocab, save_vocab
 from vision.grok.schemas import TrackedObject
 from vision.grok.tasks import describe_scene, detect_objects, name_objects, select
-from vision.planner import PlanExecutor, RobotPlan, RobotPlanAgent
 
 # vision.grok.client ha già caricato il .env. Senza chiave si va in modalità finta.
 if not os.getenv("XAI_API_KEY") and not os.getenv("GROK_MOCK"):
@@ -68,8 +67,7 @@ HELP = [
     "G       Grok trova gli oggetti (poi YOLO-World li segue)",
     "N       Grok da' i nomi",
     "S       scrivi un comando (es. prendi la penna blu)",
-    "P       pianifica missione con Grok (Plan & Solve Markdown)",
-    "D/Spazio  descrivi la scena (oppure esegui passo del piano)",
+    "D/Spazio  descrivi la scena",
     "Click Sx  seleziona oggetto",
     "Z       zoom sull'oggetto selezionato",
     "Click Dx  dezooma (oppure 0 / R)",
@@ -117,11 +115,10 @@ def _text(frame, s, x, y, color=(255, 255, 255), scale=0.45, thick=1):
     cv2.putText(frame, _ascii(s), (x, y), FONT, scale, color, thick, cv2.LINE_AA)
 
 
-def _draw_top(frame, fps, n_objs, zoom, live_status, has_plan=False):
+def _draw_top(frame, fps, n_objs, zoom, live_status):
     w = frame.shape[1]
     _box(frame, 0, 0, w, 44)
-    hint_plan = "   [Piano attivo: SPAZIO passo, A tutto]" if has_plan else ""
-    _text(frame, f"H aiuto   G trova   N nomi   S comando   P piano Grok   Z zoom   Click Dx dezooma{hint_plan}", 10, 18, (0, 230, 255))
+    _text(frame, "H aiuto   G trova   N nomi   S comando   Z zoom sel   Click Dx dezooma   D descrivi   Q esci", 10, 18, (0, 230, 255))
     _text(frame, f"FPS {fps:.0f}  |  {n_objs} oggetti  |  zoom {zoom:.1f}x  |  live: {live_status}",
           10, 36, (190, 190, 190), 0.4)
 
@@ -159,54 +156,12 @@ def _draw_panel(frame, obj, sel_id, last_cmd):
         _text(frame, s[:38], x1 + 10, y1 + 24 + 22 * i, color)
 
 
-def _draw_plan_panel(frame, plan: RobotPlan, executor: PlanExecutor | None):
-    """Visualizza il piano d'azione in formato Markdown con checkbox a schermo."""
-    h, w = frame.shape[:2]
-    pw = min(680, w - 30)
-    steps = plan.steps
-    n_show = min(8, len(steps))
-    ph = 58 + 23 * n_show + 36
-    x1 = (w - pw) // 2
-    y1 = max(50, (h - ph) // 2)
-
-    _box(frame, x1, y1, x1 + pw, y1 + ph, 0.90)
-    cv2.rectangle(frame, (x1, y1), (x1 + pw, y1 + ph), (0, 230, 255), 2)
-
-    # Titolo obiettivo e stato
-    _text(frame, f"PIANO GROK: {plan.goal[:38]}", x1 + 14, y1 + 24, (0, 255, 255), 0.50, 2)
-    _text(frame, f"{plan.progress_str()}  [{plan.status.value}]", x1 + pw - 240, y1 + 24, (120, 255, 120), 0.42)
-
-    # Elenco passi atomici
-    for i, step in enumerate(steps[:n_show]):
-        sy = y1 + 50 + 23 * i
-        chk = "[x]" if step.done else "[ ]"
-        is_cur = (plan.current_step() == step)
-        col = (90, 220, 90) if step.done else ((0, 230, 255) if is_cur else (210, 210, 210))
-        arrow = "-> " if is_cur else "   "
-        line_str = f"{arrow}{step.index}. {chk} {step.action.value}"
-        if step.target_id is not None:
-            line_str += f" #{step.target_id}"
-        coords = []
-        if step.x_mm is not None and step.y_mm is not None:
-            coords.append(f"X={step.x_mm:.0f},Y={step.y_mm:.0f}")
-        if step.z_mm is not None:
-            coords.append(f"Z={step.z_mm:.0f}")
-        if coords:
-            line_str += f" ({', '.join(coords)})"
-        if step.note:
-            line_str += f" | {step.note[:24]}"
-        _text(frame, line_str[:64], x1 + 14, sy, col, 0.44, 2 if is_cur else 1)
-
-    fy = y1 + ph - 12
-    _text(frame, "SPAZIO = esegui passo    A = esegui tutto    X / ESC = chiudi piano", x1 + 14, fy, (0, 230, 255), 0.40)
-
-
-def _draw_input(frame, buf, prompt="Comando per il robot  (Invio = manda, Esc = annulla)"):
+def _draw_input(frame, buf):
     h, w = frame.shape[:2]
     y = h // 2 - 30
     _box(frame, 20, y, w - 20, y + 64, 0.85)
     cv2.rectangle(frame, (20, y), (w - 20, y + 64), (0, 230, 255), 2)
-    _text(frame, prompt, 34, y + 22, (0, 230, 255), 0.45)
+    _text(frame, "Comando per il robot  (Invio = manda, Esc = annulla)", 34, y + 22, (0, 230, 255), 0.45)
     blink = "_" if int(time.time() * 2) % 2 else " "
     _text(frame, buf[-55:] + blink, 34, y + 50, scale=0.6)
 
@@ -295,7 +250,6 @@ def main() -> None:
         return
 
     ov = None if args.no_world else OpenVocab()  # carica in background, il video parte subito
-    planner_agent = RobotPlanAgent()
 
     cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WIN, 980, 620)
@@ -314,11 +268,9 @@ def main() -> None:
         "sel_cmd": {},        # command/action/destination_id della scelta, riscritti se si riaggancia
         "last_cmd": None,     # ultimo comando S andato a buon fine, per il pannello
         "typing": None,       # testo del comando mentre lo scrivi (None = non stai scrivendo)
-        "typing_mode": "command", # 'command' per S, 'plan' per P
-        "executor": None,     # esecutore attivo del piano robotico (Parte C)
         "help": False,
         "is_busy": False,     # una chiamata a Grok è in corso
-        "status": ("Pronto. G = Grok trova, S = comando, P = piano robot, click = seleziona, H = aiuto.", "ok"),
+        "status": ("Pronto. G = Grok trova gli oggetti, click = seleziona, H = aiuto.", "ok"),
         "latency_msg": "",
         "dog_info": "",
     }
@@ -441,20 +393,6 @@ def main() -> None:
         sent = select_obj(hit, text, res.action, res.destination_id)
         set_status(f"'{text}' -> #{hit['id']} {display_obj(hit)}, azione: {res.action}, {sent}")
 
-    def run_robot_plan(objs, raw_img, goal: str):
-        try:
-            plan, plan_file = planner_agent.plan(goal=goal, objects=objs, raw_frame=raw_img)
-            executor = PlanExecutor(
-                plan=plan,
-                plan_path=plan_file,
-                on_step_done=lambda step, d, t: set_status(f"Eseguito passo {d}/{t}: {step.action.value}"),
-                on_completed=lambda p: set_status(f"Piano completato con successo: '{p.goal}'!"),
-            )
-            st["executor"] = executor
-            set_status(f"Piano generato ({len(plan.steps)} passi): {plan_file.name}. SPAZIO = passo, A = tutto, X/Esc = chiudi")
-        except Exception as e:
-            set_status(f"Errore piano: {e}", "err")
-
     def start(job, *job_args, msg):
         st["is_busy"] = True
         set_status(msg, "wait")
@@ -535,10 +473,8 @@ def main() -> None:
                 frame_display = zoom_mgr.apply(frame_display)
 
             # Interfaccia sopra il video
-            has_plan = st.get("executor") is not None
             _draw_top(frame_display, fps_smooth, sum(1 for o in all_objs if o.get("conf", 0) >= min_conf),
-                      zoom_mgr.current_factor if zoom_mgr else 1.0, ov.status if ov else "spento",
-                      has_plan=has_plan)
+                      zoom_mgr.current_factor if zoom_mgr else 1.0, ov.status if ov else "spento")
             msg, kind = st["status"]
             _draw_status(frame_display, ("[Grok lavora...] " if st["is_busy"] else "") + msg,
                          "wait" if st["is_busy"] else kind, st["latency_msg"])
@@ -547,10 +483,7 @@ def main() -> None:
             if st["dog_info"]:
                 _text(frame_display, st["dog_info"], 10, 64, (0, 165, 255), 0.5, 2)
             if st["typing"] is not None:
-                prompt = "Obiettivo missione robot (Grok Plan & Solve)  [Invio=pianifica, Esc=annulla]" if st.get("typing_mode") == "plan" else "Comando per il robot  (Invio = manda, Esc = annulla)"
-                _draw_input(frame_display, st["typing"], prompt=prompt)
-            elif st.get("executor") is not None:
-                _draw_plan_panel(frame_display, st["executor"].plan, st["executor"])
+                _draw_input(frame_display, st["typing"])
             elif st["help"]:
                 _draw_help(frame_display)
 
@@ -571,36 +504,13 @@ def main() -> None:
                 elif key in (13, 10):
                     text, st["typing"] = st["typing"].strip(), None
                     if text and not st["is_busy"]:
-                        if st.get("typing_mode") == "plan":
-                            start(run_robot_plan, list(all_objs), raw.copy(), text, msg=f"Pianifico con Grok: '{text}'...")
-                        else:
-                            marked = draw_marks(raw, all_objs)
-                            start(run_select, marked, list(all_objs), text, msg=f"Cerco: '{text}'...")
+                        marked = draw_marks(raw, all_objs)
+                        start(run_select, marked, list(all_objs), text, msg=f"Cerco: '{text}'...")
                 elif key == 8:
                     st["typing"] = st["typing"][:-1]
                 elif 32 <= key < 127:
                     st["typing"] += chr(key)
                 continue
-
-            # Controllo piano robotico attivo
-            if st.get("executor") is not None:
-                if key in (32, 13):  # SPAZIO o INVIO: esegui un passo atomico
-                    step = st["executor"].step()
-                    if step:
-                        set_status(f"Eseguito passo {step.index}: {step.action.value} ({st['executor'].plan.progress_str()})")
-                    else:
-                        set_status(f"Piano terminato [{st['executor'].plan.status.value}]")
-                    continue
-                elif key in (ord("a"), ord("A")):
-                    if not st["executor"].is_running:
-                        st["executor"].start_background(delay_sec=0.35)
-                        set_status("Esecuzione automatica del piano avviata...")
-                    continue
-                elif key in (27, ord("x"), ord("X")):
-                    st["executor"].stop()
-                    st["executor"] = None
-                    set_status("Piano chiuso")
-                    continue
 
             if key in (27, ord("q"), ord("Q")):
                 break
@@ -619,10 +529,7 @@ def main() -> None:
                 start(run_names, draw_marks(raw, all_objs), list(all_objs), msg="Grok da' i nomi agli oggetti...")
 
             elif key in (ord("s"), ord("S")):
-                st["typing"], st["typing_mode"], st["help"] = "", "command", False
-
-            elif key in (ord("p"), ord("P")):
-                st["typing"], st["typing_mode"], st["help"] = "", "plan", False
+                st["typing"], st["help"] = "", False
 
             # C: dimentica gli oggetti di Grok, le classi di YOLO-World e vocab.json
             elif key in (ord("c"), ord("C")):
