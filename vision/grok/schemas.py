@@ -11,10 +11,11 @@ class TrackedObject(BaseModel):
     """Un oggetto riconosciuto da Visione A."""
     id: int
     label: str                      # classe YOLO, es. "cup"
-    name: str | None = None         # nome descrittivo, es. "tazza rossa con manico"
+    name: str | None = None         # nome breve da dire a voce, es. "tazza rossa"
     conf: float = Field(ge=0, le=1)
     bbox: tuple[float, float, float, float]  # x, y, w, h normalizzati 0-1 (x, y = angolo in alto a sinistra)
     color: str | None = None
+    tags: list[str] = []            # altre parole con cui chiamarlo, es. ["boccale", "manico"]
 
 
 class Detections(BaseModel):
@@ -57,8 +58,9 @@ class Result(GrokModel):
 
 class ObjectName(GrokModel):
     id: int
-    name: str              # 2-5 parole, con colore e attributi distintivi
+    name: str              # come lo direbbe una persona: tipo + colore, 1-3 parole
     color: str | None
+    tags: list[str] = []   # sinonimi e attributi (forma, materiale, parti)
 
 
 class NamesResult(Result):
@@ -87,8 +89,9 @@ class DetectedObject(GrokModel):
     """Oggetto trovato da Grok. Stessi campi di TrackedObject: l'id lo assegniamo noi."""
     id: SkipJsonSchema[int] = 0
     label: str                     # classe breve in inglese, minuscola (stile COCO)
-    name: str                      # nome italiano di 2-5 parole
+    name: str                      # tipo + colore in italiano, 1-3 parole
     color: str | None
+    tags: list[str] = []           # sinonimi e attributi
     conf: float = Field(ge=0, le=1)
     bbox: list[float] = Field(min_length=4, max_length=4)  # x, y, w, h normalizzati 0-1
 

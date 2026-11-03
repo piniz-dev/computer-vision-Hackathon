@@ -79,7 +79,7 @@ def test_detect_objects_assigns_ids_and_fixes_boxes(monkeypatch, img):
     r = tasks.detect_objects(img, start_id=100)
     assert r.ok and [o.id for o in r.objects] == [100, 101] and r.meta["discarded"] == 1
     assert r.objects[1].bbox == pytest.approx([0.9, 0.9, 0.1, 0.1])
-    assert set(r.objects[0].model_dump()) == {"id", "label", "name", "color", "conf", "bbox"}  # formato del gruppo
+    assert set(r.objects[0].model_dump()) == {"id", "label", "name", "color", "tags", "conf", "bbox"}  # formato del gruppo
 
 
 def test_detect_objects_mock_and_failure(monkeypatch, img):

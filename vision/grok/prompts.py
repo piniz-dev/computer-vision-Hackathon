@@ -26,9 +26,12 @@ def objects_block(objs: list[TrackedObject]) -> str:
 def name_objects(objs: list[TrackedObject]) -> str:
     return _BASE + f"""Oggetti: {objects_block(objs)}
 
-Compito: dai a ogni oggetto della lista un nome breve in italiano (2-5 parole) che includa il colore
-e gli attributi utili a distinguerlo dagli oggetti simili presenti (forma, materiale, dimensione).
-In "color" metti il colore principale con una sola parola italiana (null se non si capisce).
+Compito: per ogni oggetto della lista
+- name: il nome come lo direbbe una persona, tipo + colore in italiano, 1-3 parole (es. "tazza rossa").
+  Aggiungi un attributo SOLO se due oggetti avrebbero altrimenti lo stesso nome (es. "tazza rossa grande").
+- color: il colore principale con una sola parola italiana (null se non si capisce).
+- tags: altre parole italiane con cui qualcuno potrebbe chiamarlo: sinonimi, parti, forma, materiale
+  (es. ["boccale", "manico", "ceramica"]), massimo 5.
 Usa solo gli id della lista, uno per oggetto."""
 
 
@@ -65,11 +68,16 @@ def detect_objects(known: list[TrackedObject], max_objects: int) -> str:
         "Sei il sistema di visione di un robot. Rispondi SOLO con JSON, senza testo prima o dopo.\n\n"
         + skip
         + f"""Compito: trova nell'immagine gli oggetti fisici distinti e ben visibili (al massimo {max_objects}),
-quelli che si potrebbero indicare o afferrare. Ignora superfici e sfondo (pareti, pavimento, soffitto, piano del tavolo).
+quelli che si potrebbero indicare o afferrare, anche piccoli o sottili e anche se qualcuno li tiene in mano
+(in quel caso il riquadro va attorno all'oggetto, non alla mano).
+Ignora superfici e sfondo (pareti, pavimento, soffitto, piano del tavolo), persone e parti del corpo.
 Per ogni oggetto:
-- label: classe breve in inglese, minuscola (es. stile COCO)
-- name: nome breve in italiano (2-5 parole) con colore e attributi utili a distinguerlo
+- label: nome comune semplice in inglese, minuscolo, una o due parole (stile COCO): servirà a un
+  rilevatore automatico per ritrovarlo nei frame successivi
+- name: il nome come lo direbbe una persona, tipo + colore in italiano, 1-3 parole (es. "penna blu");
+  aggiungi un attributo solo se serve a distinguerlo da un oggetto uguale
 - color: colore principale, una parola italiana (null se non si capisce)
+- tags: altre parole italiane con cui chiamarlo (sinonimi, parti, forma, materiale), massimo 5
 - conf: quanto sei sicuro, da 0 a 1
 - bbox: [x, y, larghezza, altezza] normalizzati 0-1 rispetto all'immagine intera, origine in alto
   a sinistra, riquadro stretto attorno all'oggetto."""

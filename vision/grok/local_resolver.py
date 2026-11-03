@@ -1,7 +1,7 @@
 """Scorciatoia locale: risolve i comandi semplici senza chiamare Grok.
 
-Confronta la frase con `name` e `label` degli oggetti (con sinonimi italiano ->
-inglese e colori italiani) e con gli id detti a voce ("prendi il 3").
+Confronta la frase con `name`, `label` e `tags` degli oggetti (con sinonimi italiano ->
+inglese, colori italiani e plurali) e con gli id detti a voce ("prendi il 3").
 Se trova ESATTAMENTE un oggetto lo restituisce subito con source="local";
 con zero o più oggetti restituisce None e si passa a Grok.
 """
@@ -68,6 +68,15 @@ def _tokens(s: str) -> list[str]:
     return re.findall(r"[a-z0-9]+", s)
 
 
+def _stem(t: str) -> str:
+    # Toglie la vocale finale: tazza/tazze, penna/penne, bicchiere/bicchieri coincidono.
+    # ponytail: radice grezza, confonde coppie come manico/manica; uno stemmer vero se dà fastidio.
+    return t[:-1] if len(t) > 3 and t[-1] in "aeiou" else t
+
+
+_SYN = {_stem(k): v for k, v in SYNONYMS.items()}
+
+
 def _verb(t: str) -> str | None:
     return next((a for stem, a in VERBS.items() if t.startswith(stem)), None)
 
@@ -82,7 +91,7 @@ def display(o: TrackedObject) -> str:
 
 
 def _words(o: TrackedObject) -> set[str]:
-    return set(_tokens(f"{o.label} {o.name or ''}"))
+    return {_stem(t) for t in _tokens(" ".join([o.label, o.name or "", *o.tags]))}
 
 
 def _colors(o: TrackedObject) -> set[str]:
@@ -96,8 +105,8 @@ def candidates(objects: list, text: str) -> list[TrackedObject] | None:
     known = set().union(*map(_words, objs))
     colors = {_COLOR_OF[t] for t in toks if t in _COLOR_OF}
     numbers = {int(t) if t.isdigit() else NUMBERS[t] for t in toks if t.isdigit() or t in NUMBERS}
-    nouns = [t for t in toks if t not in _STOP and t not in _COLOR_OF and not _verb(t)
-             and (t in SYNONYMS or t in known)]
+    nouns = [_stem(t) for t in toks if t not in _STOP and t not in _COLOR_OF and not _verb(t)
+             and (_stem(t) in _SYN or _stem(t) in known)]
     if not (colors or numbers or nouns):
         return None
 
@@ -105,7 +114,7 @@ def candidates(objects: list, text: str) -> list[TrackedObject] | None:
         words = _words(o)
         return ((not numbers or numbers == {o.id})        # più numeri diversi -> nessuno
                 and colors <= _colors(o)                   # tutti i colori detti
-                and all(t in words or SYNONYMS.get(t) == o.label.lower() for t in nouns))
+                and all(t in words or _SYN.get(t) == o.label.lower() for t in nouns))
 
     # ponytail: niente negazioni ("non la rossa") né plurali; quei casi finiscono a Grok o sbagliano.
     return [o for o in objs if match(o)]

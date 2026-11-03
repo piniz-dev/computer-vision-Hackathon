@@ -33,5 +33,18 @@ def test_action_from_verb(objs):
     assert resolve_local(objs, "la bottiglia").action == "none"
 
 
+def test_short_names_tags_and_plurals():
+    mug = {"id": 1, "label": "mug", "name": "tazza rossa", "tags": ["boccale", "manico", "ceramica"],
+           "conf": 0.9, "bbox": [0.1, 0.1, 0.2, 0.2], "color": "rosso"}
+    pen = {"id": 2, "label": "pen", "name": "penna blu", "conf": 0.9, "bbox": [0.5, 0.1, 0.1, 0.3], "color": "blu"}
+    assert resolve_local([mug, pen], "prendi la tazza rossa con il manico").target_id == 1
+    assert resolve_local([mug, pen], "prendi il boccale").target_id == 1      # dai tag
+    assert resolve_local([mug, pen], "dammi le penne").target_id == 2         # plurale
+    assert resolve_local([mug, pen], "la tazza col cucchiaino").target_id == 1  # parola sconosciuta ignorata
+    twin = dict(mug, id=3, name="tazza rossa grande", tags=[])
+    assert resolve_local([mug, twin, pen], "prendi la tazza rossa") is None   # due tazze rosse -> Grok
+    assert resolve_local([mug, twin, pen], "prendi la tazza rossa grande").target_id == 3
+
+
 def test_bad_input_returns_none():
     assert resolve_local([{"bad": 1}], "tazza") is None
