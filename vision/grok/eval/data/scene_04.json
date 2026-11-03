@@ -1,0 +1,59 @@
+{
+ "source": "arm",
+ "frame_id": 4,
+ "ts": 0.0,
+ "objects": [
+  {
+   "id": 10,
+   "label": "square",
+   "name": "quadrato nero",
+   "conf": 0.9,
+   "bbox": [
+    0.0781,
+    0.1458,
+    0.1562,
+    0.2083
+   ],
+   "color": "nero"
+  },
+  {
+   "id": 11,
+   "label": "triangle",
+   "name": "triangolo giallo",
+   "conf": 0.9,
+   "bbox": [
+    0.3828,
+    0.1354,
+    0.1719,
+    0.2292
+   ],
+   "color": "giallo"
+  },
+  {
+   "id": 12,
+   "label": "circle",
+   "name": "cerchio blu",
+   "conf": 0.9,
+   "bbox": [
+    0.3828,
+    0.5938,
+    0.1719,
+    0.2292
+   ],
+   "color": "blu"
+  },
+  {
+   "id": 13,
+   "label": "square",
+   "name": "quadrato verde",
+   "conf": 0.9,
+   "bbox": [
+    0.7422,
+    0.5729,
+    0.1719,
+    0.2292
+   ],
+   "color": "verde"
+  }
+ ]
+}

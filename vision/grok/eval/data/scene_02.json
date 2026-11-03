@@ -1,0 +1,46 @@
+{
+ "source": "arm",
+ "frame_id": 2,
+ "ts": 0.0,
+ "objects": [
+  {
+   "id": 1,
+   "label": "square",
+   "name": "quadrato giallo",
+   "conf": 0.9,
+   "bbox": [
+    0.125,
+    0.375,
+    0.1875,
+    0.25
+   ],
+   "color": "giallo"
+  },
+  {
+   "id": 2,
+   "label": "square",
+   "name": "quadrato blu",
+   "conf": 0.9,
+   "bbox": [
+    0.4219,
+    0.375,
+    0.1875,
+    0.25
+   ],
+   "color": "blu"
+  },
+  {
+   "id": 3,
+   "label": "circle",
+   "name": "cerchio giallo",
+   "conf": 0.9,
+   "bbox": [
+    0.7109,
+    0.3854,
+    0.1719,
+    0.2292
+   ],
+   "color": "giallo"
+  }
+ ]
+}

@@ -1,0 +1,21 @@
+scene,text,expected_target_id,expected_ambiguous
+scene_01,prendi il cerchio verde,4,false
+scene_01,prendi il triangolo,3,false
+scene_01,prendi quello rosso,,true
+scene_01,prendi il cerchio,,true
+scene_01,prendi la stella gialla,,false
+scene_01,prendi il numero 2,2,false
+scene_02,prendi il quadrato blu,2,false
+scene_02,prendi l'oggetto giallo,,true
+scene_02,afferra il cerchio giallo,3,false
+scene_02,prendi il triangolo,,false
+scene_02,indica il quadrato,,true
+scene_03,prendi il cerchio rosso piccolo,6,false
+scene_03,prendi il cerchio rosso,,true
+scene_03,guarda il triangolo verde,7,false
+scene_03,prendi il quadrato,,false
+scene_03,prendi il cerchio più grande,5,false
+scene_04,prendi il quadrato verde,13,false
+scene_04,prendi il quadrato,,true
+scene_04,prendi quello più a destra,13,false
+scene_04,prendi la palla rossa,,false

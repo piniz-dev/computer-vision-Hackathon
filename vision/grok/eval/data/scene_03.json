@@ -1,0 +1,46 @@
+{
+ "source": "arm",
+ "frame_id": 3,
+ "ts": 0.0,
+ "objects": [
+  {
+   "id": 5,
+   "label": "circle",
+   "name": "cerchio rosso grande",
+   "conf": 0.9,
+   "bbox": [
+    0.125,
+    0.3125,
+    0.2812,
+    0.375
+   ],
+   "color": "rosso"
+  },
+  {
+   "id": 6,
+   "label": "circle",
+   "name": "cerchio rosso piccolo",
+   "conf": 0.9,
+   "bbox": [
+    0.5703,
+    0.4688,
+    0.1094,
+    0.1458
+   ],
+   "color": "rosso"
+  },
+  {
+   "id": 7,
+   "label": "triangle",
+   "name": "triangolo verde",
+   "conf": 0.9,
+   "bbox": [
+    0.7578,
+    0.1979,
+    0.1719,
+    0.2292
+   ],
+   "color": "verde"
+  }
+ ]
+}

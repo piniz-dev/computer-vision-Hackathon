@@ -1,0 +1,59 @@
+{
+ "source": "arm",
+ "frame_id": 1,
+ "ts": 0.0,
+ "objects": [
+  {
+   "id": 1,
+   "label": "circle",
+   "name": "cerchio rosso",
+   "conf": 0.9,
+   "bbox": [
+    0.1094,
+    0.2083,
+    0.1562,
+    0.2083
+   ],
+   "color": "rosso"
+  },
+  {
+   "id": 2,
+   "label": "square",
+   "name": "quadrato rosso",
+   "conf": 0.9,
+   "bbox": [
+    0.4141,
+    0.1771,
+    0.1719,
+    0.2292
+   ],
+   "color": "rosso"
+  },
+  {
+   "id": 3,
+   "label": "triangle",
+   "name": "triangolo blu",
+   "conf": 0.9,
+   "bbox": [
+    0.6875,
+    0.2083,
+    0.1875,
+    0.25
+   ],
+   "color": "blu"
+  },
+  {
+   "id": 4,
+   "label": "circle",
+   "name": "cerchio verde",
+   "conf": 0.9,
+   "bbox": [
+    0.3906,
+    0.625,
+    0.1562,
+    0.2083
+   ],
+   "color": "verde"
+  }
+ ]
+}
