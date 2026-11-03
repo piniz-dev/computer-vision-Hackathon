@@ -4,6 +4,8 @@ Visione A ha la sua versione per lo stream; questa serve per test e dataset.
 """
 from __future__ import annotations
 
+import math
+
 import cv2
 import numpy as np
 
@@ -54,3 +56,17 @@ def object_at(objects: list, fx: float, fy: float) -> dict | None:
         hits,
         key=lambda o: (o["bbox"][2] * o["bbox"][3]) if isinstance(o, dict) else (o.bbox[2] * o.bbox[3]),
     )
+
+
+def _center(o: dict) -> tuple[float, float]:
+    x, y, w, h = o["bbox"]
+    return x + w / 2, y + h / 2
+
+
+def reacquire(objects: list[dict], last: dict, max_dist: float = 0.25) -> dict | None:
+    """L'oggetto selezionato ha cambiato id (il tracker l'ha perso per un attimo): ritrova quello
+    della stessa classe con il centro più vicino all'ultima posizione nota, entro `max_dist`
+    (coordinate normalizzate). None se non c'è."""
+    near = [(math.dist(_center(last), _center(o)), o) for o in objects if o["label"] == last["label"]]
+    dist, obj = min(near, key=lambda t: t[0], default=(math.inf, None))
+    return obj if dist <= max_dist else None

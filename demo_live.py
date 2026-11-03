@@ -55,7 +55,7 @@ from vision.eyes.marks import draw_marks
 from vision.eyes.pipeline import EyePipeline
 from vision.grok.geometry import refine_box
 from vision.grok.local_resolver import display
-from vision.grok.marks import object_at
+from vision.grok.marks import object_at, reacquire
 from vision.grok.open_vocab import OpenVocab
 from vision.grok.schemas import TrackedObject
 from vision.grok.tasks import describe_scene, detect_objects, name_objects, select
@@ -252,6 +252,8 @@ def main() -> None:
         "meta": {},           # id -> {name, color, tags} dati da Grok (N)
         "label_meta": {},     # label -> {name, color, tags}: nomi per gli oggetti di YOLO-World
         "selected_id": None,
+        "sel_last": None,     # ultimo dict dell'oggetto selezionato, per riagganciarlo se cambia id
+        "sel_seen": 0.0,      # quando l'abbiamo visto l'ultima volta
         "last_cmd": None,
         "typing": None,       # testo del comando mentre lo scrivi (None = non stai scrivendo)
         "help": False,
@@ -272,6 +274,7 @@ def main() -> None:
 
     def select_obj(obj: dict) -> None:
         st["selected_id"] = obj["id"]
+        st["sel_last"], st["sel_seen"] = obj, time.time()
         obj["distance_m"] = _distance(obj)
         set_status(f"Selezionato #{obj['id']}: {display_obj(obj)} - distanza {format_distance(obj['distance_m'])}")
         print("\n[ROBOT PICK] Oggetto selezionato da passare al robot:")
@@ -416,7 +419,17 @@ def main() -> None:
 
             # Oggetto selezionato: sagoma (o riquadro bianco se la sagoma non si trova)
             sel = next((o for o in all_objs if o["id"] == st["selected_id"]), None)
+            # Il tracker l'ha perso per un attimo e gli ha dato un altro id: lo riagganciamo (per 3 s)
+            if sel is None and st["sel_last"] and time.time() - st["sel_seen"] < 3.0:
+                sel = reacquire(all_objs, st["sel_last"])
+                if sel is not None:
+                    old = st["selected_id"]
+                    st["selected_id"] = sel["id"]
+                    if st["last_cmd"] and st["last_cmd"]["target_id"] == old:
+                        st["last_cmd"]["target_id"] = sel["id"]
+                    set_status(f"#{sel['id']} riagganciato (prima #{old}): {display_obj(sel)}")
             if sel is not None:
+                st["sel_last"], st["sel_seen"] = sel, time.time()
                 fit = refine_box(raw, sel["bbox"])
                 if fit is not None:
                     cv2.drawContours(frame_display, [fit[1]], -1, (255, 255, 255), 4, cv2.LINE_AA)

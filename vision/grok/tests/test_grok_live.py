@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from vision.grok.geometry import refine_box
+from vision.grok.marks import reacquire
 from vision.grok.open_vocab import ID_OFFSET, to_objects
 
 
@@ -31,6 +32,16 @@ def test_to_objects():
     o = objs[0]
     assert o["id"] == ID_OFFSET + 3 and o["label"] == "pen" and o["bbox"] == pytest.approx([0.1, 0.1, 0.1, 0.3])
     assert to_objects(_result(None)) == []  # nessun id di tracking: non ancora confermato
+
+
+def test_reacquire_same_label_nearest():
+    last = {"id": 2001, "label": "pen", "bbox": [0.40, 0.40, 0.05, 0.20]}
+    moved = {"id": 2007, "label": "pen", "bbox": [0.45, 0.42, 0.05, 0.20]}     # la stessa penna, spostata
+    other = {"id": 2008, "label": "pen", "bbox": [0.90, 0.10, 0.05, 0.20]}     # un'altra penna, lontana
+    cup = {"id": 3, "label": "cup", "bbox": [0.41, 0.40, 0.10, 0.10]}          # vicina ma di classe diversa
+    assert reacquire([other, cup, moved], last)["id"] == 2007
+    assert reacquire([other, cup], last) is None                               # troppo lontana
+    assert reacquire([], last) is None
 
 
 def test_refine_box_finds_object_and_rejects_empty():
