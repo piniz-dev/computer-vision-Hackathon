@@ -21,7 +21,7 @@
 Senza XAI_API_KEY nel .env la demo parte in modalità finta (GROK_MOCK=1).
 
 Utilizzo:
-  python demo_live.py                 # Webcam 0 con YOLOv8 ONNX + YOLO-World + Grok (.env)
+  python demo_live.py                 # Tutte le camere: principale quella USB se c'è, se no quella del PC
   python demo_live.py --cam 1         # Seconda webcam
   python demo_live.py --no-yolo       # Solo Grok (senza YOLO)
   python demo_live.py --no-world      # Senza YOLO-World (gli oggetti di Grok restano fermi)
@@ -88,7 +88,8 @@ def _ascii(s: str) -> str:
 
 
 def detect_cameras(max_devices: int = 8) -> list[int]:
-    """Scansiona e restituisce gli indici di tutte le webcam funzionanti sul sistema."""
+    """Indici di tutte le webcam funzionanti, prima quelle esterne (USB, es. RealSense) e per ultima
+    la 0 del portatile: così la prima della lista, che diventa "arm", è la camera collegata se c'è."""
     available = []
     for idx in range(max_devices):
         cap = cv2.VideoCapture(idx)
@@ -97,7 +98,7 @@ def detect_cameras(max_devices: int = 8) -> list[int]:
             if ret:
                 available.append(idx)
             cap.release()
-    return available
+    return sorted(available, key=lambda i: i == 0)  # la 0 in fondo, le altre nel loro ordine
 
 
 def get_grid_cell(x: int, y: int, w: int, h: int, n: int) -> tuple[int, float, float]:
