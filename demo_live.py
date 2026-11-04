@@ -41,6 +41,7 @@ import unicodedata
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 from vision.eyes.depth import CLASS_PRIORS_CM, estimate_distance_m, format_distance
 from vision.eyes.marks import draw_marks
