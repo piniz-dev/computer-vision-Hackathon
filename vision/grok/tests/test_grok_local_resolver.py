@@ -1,6 +1,23 @@
 import pytest
 
-from vision.grok.local_resolver import resolve_local
+from vision.grok.local_resolver import display, resolve_local
+from vision.grok.schemas import TrackedObject
+
+
+@pytest.mark.parametrize("label, color, expected", [
+    ("tappo_bianco", "bianco", "tappo bianco"),        # classe del nostro modello: colore già nel nome
+    ("secchio_blu", "rosso", "secchio blu rosso"),     # colore diverso: si dice
+    ("cup", "rosso", "cup rosso"),                     # classi COCO come prima
+])
+def test_display_custom_labels(label, color, expected):
+    assert display(TrackedObject(id=1, label=label, conf=0.9, bbox=[0, 0, 0.1, 0.1], color=color)) == expected
+
+
+def test_resolve_custom_label():
+    objs = [{"id": 1, "label": "tappo_bianco", "conf": 0.9, "bbox": [0.1, 0.1, 0.1, 0.1], "color": "bianco"},
+            {"id": 2, "label": "vite_arancione", "conf": 0.9, "bbox": [0.5, 0.1, 0.1, 0.1], "color": "arancione"}]
+    assert resolve_local(objs, "prendi il tappo bianco").target_id == 1
+    assert resolve_local(objs, "prendi la vite").target_id == 2
 
 
 @pytest.mark.parametrize("text, expected", [

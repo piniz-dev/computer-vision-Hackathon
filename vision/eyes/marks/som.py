@@ -132,7 +132,7 @@ def draw_marks(
             if o.name:
                 lbl = o.name
             else:
-                base_lbl = LABEL_IT.get(o.label.lower(), o.label)
+                base_lbl = LABEL_IT.get(o.label.lower(), o.label.replace("_", " "))  # "tappo_bianco" -> "tappo bianco"
                 if o.color and o.color not in base_lbl:
                     lbl = f"{base_lbl} {o.color}"
                 else:

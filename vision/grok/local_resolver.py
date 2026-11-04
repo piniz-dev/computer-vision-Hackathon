@@ -86,8 +86,11 @@ def action_of(text: str) -> str:
 
 
 def display(o: TrackedObject) -> str:
-    """Nome da dire a voce: name se c'è, altrimenti label + colore."""
-    return o.name or " ".join(x for x in (o.label, o.color) if x)
+    """Nome da dire a voce: name se c'è, altrimenti label + colore (se il label non lo dice già:
+    il nostro modello ha classi come "tappo_bianco" -> "tappo bianco", non "tappo_bianco bianco")."""
+    label = o.label.replace("_", " ")
+    color = o.color if o.color and o.color not in label.split() else None
+    return o.name or " ".join(x for x in (label, color) if x)
 
 
 def _words(o: TrackedObject) -> set[str]:

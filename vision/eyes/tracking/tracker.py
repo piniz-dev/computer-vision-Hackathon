@@ -33,6 +33,24 @@ COCO_CLASSES = [
     "hair drier", "toothbrush"
 ]
 
+# Modello addestrato da noi sui pezzi della demo (tappo_bianco, anello_verde, vite_arancione, secchio_blu).
+# Per tornare al COCO generico: YOLO_MODEL=data/models/yolov8n.onnx nel .env.
+DEFAULT_MODEL = Path(__file__).resolve().parents[3] / "data" / "models" / "oggetti_best.onnx"
+
+
+def onnx_class_names(path: Path) -> list[str]:
+    """Classi scritte da Ultralytics nei metadati dell'ONNX ("{0: 'tappo_bianco', ...}"); COCO se mancano."""
+    try:
+        import ast
+
+        import onnx  # type: ignore
+
+        meta = {p.key: p.value for p in onnx.load(str(path), load_external_data=False).metadata_props}
+        names = ast.literal_eval(meta["names"])
+        return [names[i] for i in sorted(names)]
+    except Exception:
+        return COCO_CLASSES
+
 
 def compute_iou(box_a: tuple[float, float, float, float], box_b: tuple[float, float, float, float]) -> float:
     """Calcola l'Intersection over Union (IoU) tra due bbox `[x, y, w, h]`."""
@@ -211,7 +229,7 @@ class ObjectTracker:
         ema_alpha: float = 0.70,
         min_hits: int = 1,
     ):
-        self.model_name = model_name or os.getenv("YOLO_MODEL", "yolov8n.pt")
+        self.model_name = model_name or os.getenv("YOLO_MODEL", str(DEFAULT_MODEL))
         self.conf_threshold = conf_threshold
         self.calibrator_fn = calibrator_fn
         self.ema_alpha = ema_alpha
@@ -228,6 +246,7 @@ class ObjectTracker:
         self.use_mock = use_mock
         self._yolo_model = None
         self._onnx_net = None
+        self._onnx_names: list[str] = COCO_CLASSES
 
         if not self.use_mock:
             # 1. Prova prima con Ultralytics YOLO se presente
@@ -241,14 +260,14 @@ class ObjectTracker:
             # 2. Se ultralytics non è disponibile, prova con OpenCV DNN + ONNX
             if self._yolo_model is None:
                 candidates = [
-                    Path("data/models/yolov8n.onnx"),
-                    Path("yolov8n.onnx"),
-                    Path(__file__).resolve().parents[3] / "data" / "models" / "yolov8n.onnx",
+                    Path(self.model_name).with_suffix(".onnx"),
+                    DEFAULT_MODEL.with_name("yolov8n.onnx"),
                 ]
                 for p in candidates:
                     if p.exists():
                         try:
                             self._onnx_net = cv2.dnn.readNetFromONNX(str(p))
+                            self._onnx_names = onnx_class_names(p)
                             break
                         except Exception:
                             pass
@@ -327,8 +346,8 @@ class ObjectTracker:
         h_img, w_img = frame_bgr.shape[:2]
         blob = cv2.dnn.blobFromImage(frame_bgr, 1.0 / 255.0, (640, 640), swapRB=True, crop=False)
         self._onnx_net.setInput(blob)
-        preds = self._onnx_net.forward()[0]  # shape (84, 8400)
-        preds = preds.transpose()            # shape (8400, 84)
+        preds = self._onnx_net.forward()[0]  # shape (4 + n_classi, 8400)
+        preds = preds.transpose()            # shape (8400, 4 + n_classi)
 
         boxes = []
         confidences = []
@@ -357,7 +376,7 @@ class ObjectTracker:
             i = int(idx)
             x1, y1, bw, bh = boxes[i]
             cid = class_ids[i]
-            label = COCO_CLASSES[cid] if 0 <= cid < len(COCO_CLASSES) else "object"
+            label = self._onnx_names[cid] if 0 <= cid < len(self._onnx_names) else "object"
             conf = confidences[i]
             nx = max(0.0, min(1.0, x1 / w_img))
             ny = max(0.0, min(1.0, y1 / h_img))
