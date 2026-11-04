@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
+from vision.grok.voice_tools import TOOLS as VOICE_TOOLS
 from vision.grok.voice_tools import dispatch as voice_dispatch
 
 from ..pipeline import EyePipeline
@@ -157,6 +158,11 @@ def create_app(pipeline: EyePipeline | None = None) -> FastAPI:
             destination_id=last.get("destination_id"),
         )
         return {"ok": True} | res.model_dump()
+
+    @app.get("/voice/tools")
+    def voice_tools() -> list[dict]:
+        """Strumenti da mettere in session.tools di Grok Voice (così l'app non li copia a mano)."""
+        return VOICE_TOOLS
 
     @app.post("/voice/dispatch")
     def dispatch_voice_tool(req: VoiceToolRequest) -> dict:
