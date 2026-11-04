@@ -103,8 +103,9 @@ export interface VoiceResult {
 ```ts
 const BASE = "http://192.168.1.50:8000"; // IP del PC
 
-// Video: nient'altro che un <img>
-// <img src={`${BASE}/stream/arm`} />
+// Video in groky-app: nessun codice, basta il .env (cameras.ts legge un JPEG alla volta)
+//   EXPO_PUBLIC_CAMERAS=Visione=http://192.168.1.50:8000/frame/arm.jpg
+// (?raw=true per il frame senza riquadri. /stream/arm è MJPEG: va bene solo in un browser, non in <Image> di React Native)
 
 // Oggetti dal vivo
 const ws = new WebSocket(`${BASE.replace("http", "ws")}/ws/objects/arm?hz=10`);
@@ -140,6 +141,9 @@ Strumenti: `list_objects`, `select_object` (con `description` = le parole dell'u
 `verify_last_action`. Se `ambiguous` è `true`, la voce fa la domanda in `say` e la risposta dell'utente
 va in un nuovo `select_object`: il contesto lo teniamo noi.
 
+In groky-app: aggiungete i nostri strumenti alla lista di `grokTools()` (per esempio con il prefisso `vision_`)
+e, in `runTool`, mandate quei nomi a `POST /voice/dispatch` invece che a `{bridge}/tools/{name}`.
+
 `XAI_API_KEY` non va nel codice dell'app (finirebbe nel bundle): ditecelo se vi serve un modo per ottenerla dal server.
 
 ## 5. Esempi reali (scena di prova)
@@ -163,5 +167,6 @@ va in un nuovo `select_object`: il contesto lo teniamo noi.
 
 - `select_object` restituisce l'`id` ma **non muove il braccio**: oggi la scelta arriva al braccio
   (`logs/selection.json`) solo dalla demo sul PC. Da decidere con il gruppo robotica chi la manda.
+  Il vostro `arm_pick_place` passa il nome dell'oggetto ("red cube"), noi diamo un `id`: da allineare.
 - Il tasto G della demo (Grok trova oggetti che YOLO non conosce) non è esposto dal server.
 - `coords_mm` resta `null` finché non si calibra il braccio con i marker ArUco.
