@@ -71,6 +71,8 @@ HELP = [
     "Click Sx  seleziona oggetto",
     "Z       zoom sull'oggetto selezionato",
     "Click Dx  dezooma (oppure 0 / R)",
+    "V / Tab   cambia telecamera attiva (Cam 1 <-> Cam 2)",
+    "M       layout telecamere (singola / PiP / affiancate)",
     "C       dimentica tutto (oggetti di Grok e classi imparate)",
     "+/-     soglia confidenza    K  mostra %",
     "T       target cane",
@@ -81,6 +83,19 @@ HELP = [
 def _ascii(s: str) -> str:
     """cv2.putText non sa scrivere le lettere accentate: "è" -> "e"."""
     return unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode()
+
+
+def detect_cameras(max_devices: int = 5) -> list[int]:
+    """Scansiona e restituisce gli indici delle webcam funzionanti sul sistema."""
+    available = []
+    for idx in range(max_devices):
+        cap = cv2.VideoCapture(idx)
+        if cap.isOpened():
+            ret, _ = cap.read()
+            if ret:
+                available.append(idx)
+            cap.release()
+    return available
 
 
 def display_obj(o: dict) -> str:
@@ -115,11 +130,13 @@ def _text(frame, s, x, y, color=(255, 255, 255), scale=0.45, thick=1):
     cv2.putText(frame, _ascii(s), (x, y), FONT, scale, color, thick, cv2.LINE_AA)
 
 
-def _draw_top(frame, fps, n_objs, zoom, live_status):
+def _draw_top(frame, fps, n_objs, zoom, live_status, active_cam="arm", has_cam2=False, view_mode="single"):
     w = frame.shape[1]
     _box(frame, 0, 0, w, 44)
-    _text(frame, "H aiuto   G trova   N nomi   S comando   Z zoom sel   Click Dx dezooma   D descrivi   Q esci", 10, 18, (0, 230, 255))
-    _text(frame, f"FPS {fps:.0f}  |  {n_objs} oggetti  |  zoom {zoom:.1f}x  |  live: {live_status}",
+    cam_hint = "   V cam   M layout" if has_cam2 else ""
+    _text(frame, f"H aiuto   G trova   N nomi   S comando   Z zoom sel   Click Dx dezooma{cam_hint}   D descrivi   Q esci", 10, 18, (0, 230, 255))
+    cam_badge = f"CAM: {active_cam.upper()}" + (f" [{view_mode}]" if has_cam2 else "")
+    _text(frame, f"[{cam_badge}]  FPS {fps:.0f}  |  {n_objs} oggetti  |  zoom {zoom:.1f}x  |  live: {live_status}",
           10, 36, (190, 190, 190), 0.4)
 
 
@@ -177,7 +194,8 @@ def _draw_help(frame):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--cam", type=int, default=0, help="Indice webcam (default 0)")
+    parser.add_argument("--cam", type=int, default=0, help="Indice prima webcam (default 0)")
+    parser.add_argument("--cam2", type=str, default="auto", help="Indice seconda webcam ('auto', numero es. 1/2, stream o 'none')")
     parser.add_argument("--replay", action="store_true", help="Usa simulazione replay al posto della webcam")
     parser.add_argument("--no-yolo", action="store_true", help="Disabilita YOLO locale (solo rilevamento via Grok)")
     parser.add_argument("--no-world", action="store_true", help="Disabilita YOLO-World (oggetti di Grok fermi)")
@@ -200,14 +218,54 @@ def main() -> None:
         conf_threshold=0.25,
         ema_alpha=0.65,
     )
+
+    # Rilevamento e configurazione seconda telecamera
+    cam2_target = None
+    cam2_mode = "webcam"
+    if not args.replay:
+        val = str(args.cam2).strip()
+        if val.lower() == "auto":
+            avail = detect_cameras(5)
+            others = [c for c in avail if c != args.cam]
+            if others:
+                cam2_target = others[0]
+                print(f"[Cam] Seconda telecamera rilevata automaticamente: indice {cam2_target} ('dog')")
+            else:
+                print(f"[Cam] Singola telecamera rilevata (Cam {args.cam}).")
+        elif val.lower() not in ("none", "no", "false", "off", ""):
+            if val.isdigit():
+                cam2_target = int(val)
+                print(f"[Cam] Seconda telecamera configurata all'indice {cam2_target}")
+            else:
+                cam2_target = val
+                cam2_mode = "stream"
+                print(f"[Cam] Seconda telecamera configurata come stream: {cam2_target}")
+
+    has_cam2 = cam2_target is not None
+    if has_cam2:
+        pipeline.add_source(
+            source="dog",
+            mode=cam2_mode,
+            target=cam2_target,
+            use_mock_tracker=args.no_yolo,
+            model_name=args.model,
+            conf_threshold=0.25,
+            ema_alpha=0.65,
+        )
+
+    # Avvia acquisizione fluida in background per le sorgenti registrate
+    for node in pipeline.nodes.values():
+        node.reader.start_background()
+
     arm_node = pipeline.nodes.get("arm")
     zoom_mgr = arm_node.zoom if arm_node else None
 
     # --no-yolo: tracker senza modello e senza oggetti finti, così gli oggetti arrivano solo da Grok
-    if args.no_yolo and arm_node:
-        arm_node.tracker.use_mock = False
-        arm_node.tracker._yolo_model = None
-        arm_node.tracker._onnx_net = None
+    if args.no_yolo:
+        for node in pipeline.nodes.values():
+            node.tracker.use_mock = False
+            node.tracker._yolo_model = None
+            node.tracker._onnx_net = None
 
     # --once: una foto, YOLO + Grok, immagine salvata e risultato nel terminale
     if args.once:
@@ -257,6 +315,11 @@ def main() -> None:
     # Stato condiviso tra ciclo video, click e thread delle chiamate a Grok.
     # ponytail: dict senza lock, basta per una demo (una sola chiamata Grok alla volta).
     st = {
+        "active_source": "arm",
+        "has_cam2": has_cam2,
+        "cam1_info": f"Cam {args.cam}",
+        "cam2_info": f"Cam {cam2_target}" if has_cam2 else None,
+        "view_mode": "single", # 'single', 'pip', 'split'
         "grok_objects": [],   # riquadri fermi di Grok (finché YOLO-World non segue quella classe)
         "objects": [],        # tutti gli oggetti dell'ultimo frame
         "frame_size": (640, 480),
@@ -270,7 +333,7 @@ def main() -> None:
         "typing": None,       # testo del comando mentre lo scrivi (None = non stai scrivendo)
         "help": False,
         "is_busy": False,     # una chiamata a Grok è in corso
-        "status": ("Pronto. G = Grok trova gli oggetti, click = seleziona, H = aiuto.", "ok"),
+        "status": ("Pronto. G = Grok trova, S = comando, V = cambia cam, click = seleziona, H = aiuto." if has_cam2 else "Pronto. G = Grok trova gli oggetti, click = seleziona, H = aiuto.", "ok"),
         "latency_msg": "",
         "dog_info": "",
     }
@@ -296,6 +359,7 @@ def main() -> None:
     def send(obj: dict) -> str:
         """Scrive la scelta in logs/selection.json per il braccio; restituisce il testo per la barra."""
         obj["distance_m"] = _distance(obj)
+        obj["source_camera"] = st["active_source"]
         msg = send_selection(SELECTION_PATH, obj, **st["sel_cmd"])
         if msg is None:
             return "NON inviato al robot (logs/selection.json non scrivibile)"
@@ -320,9 +384,34 @@ def main() -> None:
         if event != cv2.EVENT_LBUTTONDOWN:
             return
         win_w, win_h = st["frame_size"]
-        fx, fy = x / max(1, win_w), y / max(1, win_h)
-        if zoom_mgr is not None and zoom_mgr.is_active():  # da coordinate dello zoom a quelle del frame intero
-            fx, fy = zoom_mgr.zoomed_to_full_coords(fx, fy)
+
+        # Clic su miniatura PiP -> scambio telecamere immediato
+        if st["has_cam2"] and st["view_mode"] == "pip":
+            if (win_w - 206) <= x <= (win_w - 14) and (win_h - 158) <= y <= (win_h - 14):
+                st["active_source"] = "dog" if st["active_source"] == "arm" else "arm"
+                cam_lbl = st["cam2_info"] if st["active_source"] == "dog" else st["cam1_info"]
+                set_status(f"Telecamera attiva cambiata da PiP: {st['active_source'].upper()} ({cam_lbl})")
+                return
+
+        # Clic in modalità split -> attiva la telecamera cliccata
+        if st["has_cam2"] and st["view_mode"] == "split":
+            if x < win_w // 2:
+                if st["active_source"] != "arm":
+                    st["active_source"] = "arm"
+                    set_status(f"Telecamera attiva: ARM ({st['cam1_info']})")
+                fx, fy = (x / max(1, win_w // 2)), y / max(1, win_h)
+            else:
+                if st["active_source"] != "dog":
+                    st["active_source"] = "dog"
+                    set_status(f"Telecamera attiva: DOG ({st['cam2_info']})")
+                fx, fy = ((x - win_w // 2) / max(1, win_w // 2)), y / max(1, win_h)
+        else:
+            fx, fy = x / max(1, win_w), y / max(1, win_h)
+
+        cur_node = pipeline.nodes.get(st["active_source"])
+        cur_zoom = cur_node.zoom if cur_node else None
+        if cur_zoom is not None and cur_zoom.is_active():  # da coordinate dello zoom a quelle del frame intero
+            fx, fy = cur_zoom.zoomed_to_full_coords(fx, fy)
         clicked_obj = object_at(st["objects"], fx, fy)
         if clicked_obj is not None:
             select_obj(clicked_obj)
@@ -421,10 +510,24 @@ def main() -> None:
             if dt > 0:
                 fps_smooth = 0.90 * fps_smooth + 0.10 * (1.0 / dt)
 
-            pipeline.step("arm", min_display_conf=min_conf, show_conf=show_conf, apply_zoom=False)
-            raw = pipeline.state.get_frame("arm")
+            active_src = st["active_source"]
+            cur_node = pipeline.nodes.get(active_src)
+            zoom_mgr = cur_node.zoom if cur_node else None
+
+            # Acquisisce e processa la telecamera attiva
+            pipeline.step(active_src, min_display_conf=min_conf, show_conf=show_conf, apply_zoom=False)
+            raw = pipeline.state.get_frame(active_src)
+            if raw is None or raw.size == 0:
+                time.sleep(0.01)
+                continue
             st["frame_size"] = (raw.shape[1], raw.shape[0])
-            yolo_objs = pipeline.state.get_objects("arm")
+            yolo_objs = pipeline.state.get_objects(active_src)
+
+            # Se in PiP o Split, acquisisce anche la seconda telecamera
+            if st["has_cam2"] and st["view_mode"] in ("pip", "split"):
+                other_src = "dog" if active_src == "arm" else "arm"
+                if other_src in pipeline.nodes:
+                    pipeline.step(other_src, min_display_conf=min_conf, show_conf=show_conf, apply_zoom=False)
 
             # YOLO-World: oggetti vivi delle classi trovate da Grok, con i nomi dati da Grok
             live = []
@@ -472,9 +575,43 @@ def main() -> None:
                 zoom_mgr.update_with_tracked_objects(all_objs)
                 frame_display = zoom_mgr.apply(frame_display)
 
+            # Modalità visualizzazione multi-camera (PiP o Split)
+            if st["has_cam2"]:
+                other_src = "dog" if active_src == "arm" else "arm"
+                other_frame = pipeline.state.get_marked_frame(other_src)
+                if other_frame is not None and other_frame.size > 0:
+                    h_f, w_f = frame_display.shape[:2]
+                    if st["view_mode"] == "pip":
+                        pw, ph = 192, 144
+                        mini = cv2.resize(other_frame, (pw, ph))
+                        cv2.rectangle(mini, (0, 0), (pw - 1, ph - 1), (0, 230, 255), 2)
+                        _box(mini, 0, 0, pw, 22, 0.75)
+                        _text(mini, f"{other_src.upper()} (clic/V per scambiare)", 6, 16, (0, 255, 255), 0.35, 1)
+                        y1, y2 = h_f - ph - 14, h_f - 14
+                        x1, x2 = w_f - pw - 14, w_f - 14
+                        frame_display[y1:y2, x1:x2] = mini
+                    elif st["view_mode"] == "split":
+                        half_w = w_f // 2
+                        f_arm = (frame_display if active_src == "arm" else other_frame)
+                        f_dog = (frame_display if active_src == "dog" else other_frame)
+                        left_img = cv2.resize(f_arm, (half_w, h_f))
+                        right_img = cv2.resize(f_dog, (half_w, h_f))
+
+                        col_arm = (0, 255, 100) if active_src == "arm" else (160, 160, 160)
+                        col_dog = (0, 255, 100) if active_src == "dog" else (160, 160, 160)
+                        _box(left_img, 10, h_f - 36, 210, h_f - 10, 0.75)
+                        _text(left_img, "ARM " + ("[ATTIVA]" if active_src == "arm" else "[V/Clicca]"), 16, h_f - 18, col_arm, 0.44, 2 if active_src == "arm" else 1)
+
+                        _box(right_img, 10, h_f - 36, 210, h_f - 10, 0.75)
+                        _text(right_img, "DOG " + ("[ATTIVA]" if active_src == "dog" else "[V/Clicca]"), 16, h_f - 18, col_dog, 0.44, 2 if active_src == "dog" else 1)
+
+                        frame_display = np.hstack([left_img, right_img])
+                        cv2.line(frame_display, (half_w, 0), (half_w, h_f), (0, 230, 255), 2)
+
             # Interfaccia sopra il video
             _draw_top(frame_display, fps_smooth, sum(1 for o in all_objs if o.get("conf", 0) >= min_conf),
-                      zoom_mgr.current_factor if zoom_mgr else 1.0, ov.status if ov else "spento")
+                      zoom_mgr.current_factor if zoom_mgr else 1.0, ov.status if ov else "spento",
+                      active_cam=st["active_source"], has_cam2=st["has_cam2"], view_mode=st["view_mode"])
             msg, kind = st["status"]
             _draw_status(frame_display, ("[Grok lavora...] " if st["is_busy"] else "") + msg,
                          "wait" if st["is_busy"] else kind, st["latency_msg"])
@@ -517,6 +654,24 @@ def main() -> None:
 
             elif key in (ord("h"), ord("H")):
                 st["help"] = not st["help"]
+
+            elif key in (ord("v"), ord("V"), 9):  # V o TAB: cambia telecamera attiva
+                if st["has_cam2"]:
+                    st["active_source"] = "dog" if st["active_source"] == "arm" else "arm"
+                    cam_info = st["cam2_info"] if st["active_source"] == "dog" else st["cam1_info"]
+                    set_status(f"Telecamera attiva: {st['active_source'].upper()} ({cam_info})")
+                else:
+                    set_status("Seconda telecamera non configurata (usa --cam2)", "wait")
+
+            elif key in (ord("m"), ord("M")):  # M: cambia modalità layout
+                if st["has_cam2"]:
+                    modes = ["single", "pip", "split"]
+                    cur_idx = modes.index(st["view_mode"])
+                    st["view_mode"] = modes[(cur_idx + 1) % len(modes)]
+                    lbls = {"single": "Singola (tutto schermo)", "pip": "Picture-in-Picture (PiP)", "split": "Affiancate (Split)"}
+                    set_status(f"Layout telecamere: {lbls[st['view_mode']]}")
+                else:
+                    set_status("Layout multi-cam richiede una seconda telecamera", "wait")
 
             elif key in (ord("g"), ord("G")) and not st["is_busy"]:
                 start(run_grok_detect, raw.copy(), list(yolo_objs), msg="Grok cerca gli oggetti nella scena...")
